@@ -19,14 +19,18 @@ import MapComponent from "@/components/map-component";
 import ChatMessage from "@/components/chat-message";
 import { useMobile } from "@/hooks/use-mobile";
 
-interface Message {
-  id: string;
-  content: string;
-  createdAt: string;
-  userName: string;
-}
+// Storage keys
+const GEOHASH_STORAGE_KEY = "chat_geohash";
 
 interface User {
+  id: string;
+  name: string;
+  avatar: string;
+  coordinates: [number, number];
+}
+
+// Interface to match what the MapComponent expects
+interface MapUser {
   id: number;
   name: string;
   avatar: string;
@@ -35,11 +39,18 @@ interface User {
   isUser?: boolean;
 }
 
+interface Message {
+  id: string;
+  content: string;
+  createdAt: string;
+  user: User;
+}
+
 export default function ChatPage() {
   const isMobile = useMobile();
   const [mapExpanded, setMapExpanded] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [users, setUsers] = useState<string[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [geohash, setGeohash] = useState<string | null>(null);
   const [currentUserCoordinates, setCurrentUserCoordinates] = useState<
@@ -48,13 +59,31 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const previousUsers = useRef<string[]>([]);
+  const previousUsers = useRef<User[]>([]);
 
   const { data: session } = authClient.useSession();
 
+  // Load cached geohash on initial render
+  useEffect(() => {
+    const cachedGeohash = localStorage.getItem(GEOHASH_STORAGE_KEY);
+    if (cachedGeohash) {
+      setGeohash(cachedGeohash);
+    }
+  }, []);
+
+  // When geohash changes, save to local storage
+  useEffect(() => {
+    if (geohash) {
+      localStorage.setItem(GEOHASH_STORAGE_KEY, geohash);
+    }
+  }, [geohash]);
+
   const handleLocationSelect = (lat: number, lng: number, hash: string) => {
-    setGeohash(hash);
-    setError(null);
+    // Compare with current geohash before setting
+    if (hash !== geohash) {
+      setGeohash(hash);
+      setError(null);
+    }
   };
 
   const precision = 6;
@@ -68,17 +97,42 @@ export default function ChatPage() {
             pos.coords.latitude,
           ];
           setCurrentUserCoordinates(coordinates);
-          const hash = ngeohash.encode(
+
+          // Generate new hash based on current coordinates
+          const newHash = ngeohash.encode(
             pos.coords.latitude,
             pos.coords.longitude,
             precision
           );
-          setGeohash(hash);
+
+          // Check if the geohash is significantly different (different chat room)
+          const cachedGeohash = localStorage.getItem(GEOHASH_STORAGE_KEY);
+
+          if (!cachedGeohash) {
+            // No cached geohash, set the new one
+            setGeohash(newHash);
+            localStorage.setItem(GEOHASH_STORAGE_KEY, newHash);
+          } else if (cachedGeohash !== newHash) {
+            // Significant location change detected
+            // For now, we'll keep using the cached geohash unless the user explicitly changes it
+            // This prevents accidentally switching chat rooms when the user moves slightly
+            setGeohash(cachedGeohash);
+
+            // Optionally, you could show a notification to the user that their location has changed
+            // and give them the option to switch to the new chat room
+            console.log("Location changed significantly. Using cached room.");
+          } else {
+            // Same geohash, continue using it
+            setGeohash(cachedGeohash);
+          }
+
           setError(null);
         },
         (err) => {
           console.error("Initial geolocation error:", err);
           setError("Getting your location...");
+
+          // Fallback geolocation attempt
           navigator.geolocation.getCurrentPosition(
             (pos) => {
               const coordinates: [number, number] = [
@@ -86,19 +140,44 @@ export default function ChatPage() {
                 pos.coords.latitude,
               ];
               setCurrentUserCoordinates(coordinates);
-              const hash = ngeohash.encode(
+
+              // Generate new hash with fallback coordinates
+              const newHash = ngeohash.encode(
                 pos.coords.latitude,
                 pos.coords.longitude,
                 precision
               );
-              setGeohash(hash);
+
+              // Check against cached geohash
+              const cachedGeohash = localStorage.getItem(GEOHASH_STORAGE_KEY);
+
+              if (!cachedGeohash) {
+                setGeohash(newHash);
+                localStorage.setItem(GEOHASH_STORAGE_KEY, newHash);
+              } else if (cachedGeohash !== newHash) {
+                // Use cached geohash to maintain chat room
+                setGeohash(cachedGeohash);
+              } else {
+                setGeohash(cachedGeohash);
+              }
+
               setError(null);
             },
             (errFallback) => {
               console.error("Fallback geolocation error:", errFallback);
-              setError(
-                "Unable to get your location. Please check your location settings."
-              );
+
+              // If we can't get location but have a cached geohash, use it
+              const cachedGeohash = localStorage.getItem(GEOHASH_STORAGE_KEY);
+              if (cachedGeohash) {
+                setGeohash(cachedGeohash);
+                setError(
+                  "Using last known location. Location services unavailable."
+                );
+              } else {
+                setError(
+                  "Unable to get your location. Please check your location settings."
+                );
+              }
             },
             { enableHighAccuracy: false, timeout: 5000, maximumAge: 0 }
           );
@@ -112,13 +191,43 @@ export default function ChatPage() {
             pos.coords.longitude,
             pos.coords.latitude,
           ];
+
+          // Update local state
           setCurrentUserCoordinates(coordinates);
-          const hash = ngeohash.encode(
+
+          // Send updated coordinates to server
+          if (
+            ws.current &&
+            ws.current.readyState === WebSocket.OPEN &&
+            session?.user
+          ) {
+            const userData: User = {
+              id:
+                session.user.id || Math.random().toString(36).substring(2, 15),
+              name: session.user.name || "Anonymous",
+              avatar: session.user.image || "/placeholder.svg",
+              coordinates: coordinates,
+            };
+
+            ws.current.send(
+              JSON.stringify({
+                type: "user",
+                data: userData,
+              })
+            );
+          }
+
+          // Update geohash comparison code remains...
+          const newHash = ngeohash.encode(
             pos.coords.latitude,
             pos.coords.longitude,
             precision
           );
-          setGeohash(hash);
+
+          if (newHash !== geohash) {
+            console.log("You've moved to a new area. Current room maintained.");
+          }
+
           setError(null);
         },
         (err) => {
@@ -134,9 +243,15 @@ export default function ChatPage() {
         navigator.geolocation.clearWatch(watchId);
       };
     } else {
-      setError("Geolocation is not supported by your browser.");
+      const cachedGeohash = localStorage.getItem(GEOHASH_STORAGE_KEY);
+      if (cachedGeohash) {
+        setGeohash(cachedGeohash);
+        setError("Using cached location. Geolocation not supported.");
+      } else {
+        setError("Geolocation is not supported by your browser.");
+      }
     }
-  }, [precision]);
+  }, [precision, geohash, ws, session, currentUserCoordinates]);
 
   // Toggle map expansion on mobile
   const toggleMap = () => {
@@ -151,8 +266,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (!geohash) return;
 
-    // Close existing WebSocket connection if any
     if (ws.current) {
+      console.log("Closing WebSocket connection123456");
       ws.current.close();
     }
 
@@ -171,6 +286,24 @@ export default function ChatPage() {
         ws.current.onopen = () => {
           console.log("WebSocket connected");
           setError(null);
+
+          // Send user data when connection is established
+          if (ws.current && session?.user) {
+            const userData: User = {
+              id:
+                session.user.id || Math.random().toString(36).substring(2, 15),
+              name: session.user.name || "Anonymous",
+              avatar: session.user.image || "/placeholder.svg",
+              coordinates: currentUserCoordinates || [0, 0],
+            };
+
+            ws.current.send(
+              JSON.stringify({
+                type: "user",
+                data: userData,
+              })
+            );
+          }
         };
 
         ws.current.onmessage = (event) => {
@@ -178,13 +311,15 @@ export default function ChatPage() {
           if (data.type === "history") {
             setMessages(data.messages);
           } else if (data.type === "users") {
-            setUsers(JSON.parse(data.users));
-          } else if (
-            data.content &&
-            data.userName &&
-            data.createdAt &&
-            data.id
-          ) {
+            // Parse the users string to a User[] array
+            try {
+              const parsedUsers = JSON.parse(data.users);
+              console.log("Received users from server:", parsedUsers);
+              setUsers(parsedUsers);
+            } catch (e) {
+              console.error("Error parsing users:", e);
+            }
+          } else if (data.content && data.user && data.createdAt && data.id) {
             // Check if it's a new message
             setMessages((prevMessages) => [...prevMessages, data]);
           }
@@ -211,23 +346,33 @@ export default function ChatPage() {
 
     return () => {
       if (ws.current) {
+        console.log("clean up");
         ws.current.close();
       }
     };
-  }, [geohash]);
+  }, [geohash, session]);
 
   const sendMessage = () => {
     if (
       newMessage.trim() &&
       ws.current &&
-      ws.current.readyState === WebSocket.OPEN
+      ws.current.readyState === WebSocket.OPEN &&
+      session?.user
     ) {
       const randomId = Math.random().toString(36).substring(2, 15);
-      const messageData: Message = {
-        id: new Date().toISOString() + randomId+"-"+session?.user?.name, // Simple ID generation
-        content: newMessage,
-        createdAt: new Date().toISOString(),
-        userName: session?.user?.name || "Anonymous",
+      const messageData = {
+        type: "message",
+        data: {
+          id: new Date().toISOString() + randomId + "-" + session?.user?.name,
+          content: newMessage,
+          createdAt: new Date().toISOString(),
+          user: {
+            id: session.user.id || randomId,
+            name: session.user.name || "Anonymous",
+            avatar: session.user.image || "/placeholder.svg",
+            coordinates: currentUserCoordinates || [0, 0],
+          },
+        },
       };
       ws.current.send(JSON.stringify(messageData));
       setNewMessage("");
@@ -242,36 +387,67 @@ export default function ChatPage() {
     });
   };
 
-  // Remove the mockUsers array and create a computed users array based on actual data
-  const mapUsers = useMemo(() => {
-    if (!geohash) return [];
+  // Create a computed users array that matches what MapComponent expects
+  const mapUsers = useMemo((): MapUser[] => {
+    if (!geohash || !session?.user) return [];
 
-    const currentUser: User = {
-      id: 1,
+    // Find current user in the users array if it exists
+    const existingUser = users.find((user) => user.id === session.user?.id);
+
+    // Current user with actual coordinates from state
+    const currentUser: MapUser = {
+      id: 1, // Use numeric ID for map component
       name: session?.user?.name || "You",
       avatar: session?.user?.image || "/placeholder.svg",
-      coordinates: currentUserCoordinates || ([0, 0] as [number, number]),
+      // Use the user's actual coordinates from the server if available, otherwise fall back to local state
+      coordinates: (existingUser?.coordinates ||
+        currentUserCoordinates || [0, 0]) as [number, number],
       isUser: true,
       distance: "nearby",
     };
 
-    const otherUsers: User[] = users.map((userName, index) => ({
-      id: index + 2,
-      name: userName,
-      avatar: "/placeholder.svg",
-      coordinates: [0, 0] as [number, number],
-      distance: "nearby",
-    }));
+    // Only include other users (exclude current user to avoid duplication)
+    const otherUsers: MapUser[] = users
+      .filter((user) => user.id !== session.user?.id)
+      .map((user, index) => ({
+        id: index + 2, // Start at 2 since current user is 1
+        name: user.name,
+        avatar: user.avatar || "/placeholder.svg",
+        coordinates: user.coordinates || [0, 0],
+        distance: "nearby",
+      }));
 
     return [currentUser, ...otherUsers];
-  }, [
-    geohash,
-    users,
-    session?.user?.name,
-    session?.user?.image,
-    currentUserCoordinates,
-  ]);
-  console.log(mapUsers);
+  }, [geohash, users, session?.user, currentUserCoordinates]);
+
+  // Update user coordinates on the server whenever they change
+  useEffect(() => {
+    if (
+      ws.current &&
+      ws.current.readyState === WebSocket.OPEN &&
+      session?.user &&
+      currentUserCoordinates
+    ) {
+      // Send updated coordinates
+      const userData: User = {
+        id: session.user.id || Math.random().toString(36).substring(2, 15),
+        name: session.user.name || "Anonymous",
+        avatar: session.user.image || "/placeholder.svg",
+        coordinates: currentUserCoordinates,
+      };
+
+      // Only send if we have actual coordinates
+      if (currentUserCoordinates[0] !== 0 || currentUserCoordinates[1] !== 0) {
+        ws.current.send(
+          JSON.stringify({
+            type: "user",
+            data: userData,
+          })
+        );
+      }
+    }
+  }, [currentUserCoordinates, session, ws]);
+
   return (
     <main className="flex min-h-screen flex-col bg-gradient-to-br from-gray-900 via-purple-950 to-black overflow-hidden">
       <div className="relative w-full h-screen flex flex-col">
@@ -400,12 +576,13 @@ export default function ChatPage() {
                 {messages.map((msg) => (
                   <ChatMessage
                     key={msg.id}
-                    avatar="/placeholder.svg"
-                    name={msg.userName}
+                    avatar={msg.user.avatar || "/placeholder.svg"}
+                    name={msg.user.name}
                     message={msg.content}
                     time={formatTime(msg.createdAt)}
                     distance="nearby"
-                    isIncoming={msg.userName !== session?.user?.name}
+                    isIncoming={msg.user.id !== session?.user?.id}
+                    isSystem={msg.user.id === "system"}
                   />
                 ))}
                 <div ref={messagesEndRef} />

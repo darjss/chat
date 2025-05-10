@@ -64,25 +64,17 @@ export class ChatRoom extends DurableObject {
     );
 
     server.addEventListener("close", () => {
+      const leavingUser = this.sessions.find((s) => s.socket === server)?.user;
+
       this.sessions = this.sessions.filter((s) => s.socket !== server);
-      server.send(
-        JSON.stringify({
-          users: JSON.stringify(this.sessions.map((s) => s.user)),
-          type: "users",
-        })
-      );
-    });
-    server.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data as string) as Event;
-      if (message.type === "message") {
-        this.messages.push(message.data as Message);
-        this.broadcast(message.data as Message);
-      } else if (message.type === "user") {
-        this.sessions.push({ user: message.data as User, socket: server });
+
+      this.broadcastUsers();
+
+      if (leavingUser) {
         const randomId = Math.random().toString(36).substring(2, 15);
-        const messageData: Message = {
-          id: new Date().toISOString() + randomId + "-" + session?.user?.name, // Simple ID generation
-          content: user.name + " joined the chat",
+        const leaveMessage: Message = {
+          id: new Date().toISOString() + randomId,
+          content: `${leavingUser.name} left the chat`,
           createdAt: new Date().toISOString(),
           user: {
             id: "system",
@@ -91,17 +83,70 @@ export class ChatRoom extends DurableObject {
             coordinates: [0, 0],
           },
         };
-        this.broadcast(messageData);
+
+        this.messages.push(leaveMessage);
+
+        this.broadcast(leaveMessage);
       }
     });
+
+    server.addEventListener("message", (event) => {
+      const message = JSON.parse(event.data as string) as Event;
+      if (message.type === "message") {
+        this.messages.push(message.data as Message);
+        this.broadcast(message.data as Message);
+      } else if (message.type === "user") {
+        const existingUserIndex = this.sessions.findIndex(
+          (s) => s.user.id === (message.data as User).id
+        );
+
+        if (existingUserIndex >= 0) {
+          this.sessions[existingUserIndex].user = message.data as User;
+          this.broadcastUsers();
+        } else {
+          this.sessions.push({ user: message.data as User, socket: server });
+
+          const randomId = Math.random().toString(36).substring(2, 15);
+          const messageData: Message = {
+            id: new Date().toISOString() + randomId,
+            content: `${(message.data as User).name} joined the chat`,
+            createdAt: new Date().toISOString(),
+            user: {
+              id: "system",
+              name: "System",
+              avatar: "",
+              coordinates: [0, 0],
+            },
+          };
+
+          this.messages.push(messageData);
+
+          this.broadcast(messageData);
+          this.broadcastUsers();
+        }
+      }
+    });
+
     return new Response(null, {
       status: 101,
       webSocket: client,
     });
   }
+
   broadcast(message: Message) {
     this.sessions.forEach((s) => {
       s.socket.send(JSON.stringify(message));
+    });
+  }
+
+  broadcastUsers() {
+    const usersData = JSON.stringify({
+      users: JSON.stringify(this.sessions.map((s) => s.user)),
+      type: "users",
+    });
+
+    this.sessions.forEach((s) => {
+      s.socket.send(usersData);
     });
   }
 }

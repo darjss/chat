@@ -12,7 +12,7 @@ const MAPBOX_TOKEN =
   "pk.eyJ1Ijoic291bmRicnVoIiwiYSI6ImNtYWlmeW8zODA2NW8yanM3NTVrbnZicHUifQ.zAlsz8FbfH8N4sUadaCylA";
 
 interface User {
-  id: number
+  id: number;
   name: string;
   avatar: string;
   coordinates: [number, number];
@@ -35,10 +35,13 @@ export default function MapComponent({
   const map = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<{ [key: number]: mapboxgl.Marker }>({});
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [initialAnimationComplete, setInitialAnimationComplete] =
+    useState(false);
 
   useEffect(() => {
     if (!mapContainer.current) return;
 
+    console.log("Initializing map");
     mapboxgl.accessToken = MAPBOX_TOKEN;
 
     map.current = new mapboxgl.Map({
@@ -52,13 +55,19 @@ export default function MapComponent({
     });
 
     map.current.on("style.load", () => {
+      console.log("Map style loaded");
       if (map.current) {
         map.current.setFog({}); // Add atmosphere for globe view
       }
     });
 
     map.current.on("load", () => {
+      console.log("Map fully loaded");
       setMapLoaded(true);
+    });
+
+    map.current.on("error", (e) => {
+      console.error("Map error:", e);
     });
 
     return () => {
@@ -71,7 +80,37 @@ export default function MapComponent({
 
   // New useEffect to center the map when centerCoordinates prop changes
   useEffect(() => {
-    if (map.current && mapLoaded && centerCoordinates) {
+    if (
+      map.current &&
+      mapLoaded &&
+      centerCoordinates &&
+      initialAnimationComplete
+    ) {
+      // If this is just an update to the user's position, smoothly pan to it
+      // without the spinning animation
+      map.current.flyTo({
+        center: centerCoordinates,
+        zoom: 16,
+        essential: true,
+        duration: 1000, // Shorter, smoother transition
+      });
+    }
+  }, [centerCoordinates, mapLoaded, initialAnimationComplete]);
+
+  // Run spinning globe animation only once on initial load
+  useEffect(() => {
+    // Only run if the map is loaded, coordinates are available, and animation hasn't run yet
+    if (
+      map.current &&
+      mapLoaded &&
+      centerCoordinates &&
+      !initialAnimationComplete
+    ) {
+      console.log(
+        "Starting initial globe animation with coordinates:",
+        centerCoordinates
+      );
+
       const spinGlobeAndFly = async () => {
         if (!map.current) return;
 
@@ -87,7 +126,7 @@ export default function MapComponent({
         await new Promise((resolve) => setTimeout(resolve, 1000));
 
         // 2. Spin the globe
-        const spinDuration = 1500; // 4 seconds for spinning
+        const spinDuration = 1500; // 1.5 seconds for spinning
         const revolutions = 1;
         const startTime = performance.now();
 
@@ -108,6 +147,9 @@ export default function MapComponent({
                 essential: true,
                 duration: 3000, // 3 seconds to fly in
               });
+
+              // Mark animation as complete
+              setInitialAnimationComplete(true);
             }
           }
         };
@@ -116,7 +158,39 @@ export default function MapComponent({
 
       spinGlobeAndFly();
     }
-  }, [centerCoordinates, mapLoaded]);
+  }, [mapLoaded, centerCoordinates, initialAnimationComplete]); // Dependencies include centerCoordinates and initialAnimationComplete
+
+  // After initial map initialization, add a backup effect to ensure the map is displayed
+  useEffect(() => {
+    // Fallback to ensure map appears even if spinning animation can't run
+    if (map.current && mapLoaded && !initialAnimationComplete) {
+      // If we've waited 5 seconds and still don't have coordinates or animation hasn't completed
+      const timeoutId = setTimeout(() => {
+        if (!initialAnimationComplete) {
+          console.log("Map fallback: Setting initial animation complete");
+          setInitialAnimationComplete(true);
+
+          // If we have coordinates, center on them
+          if (centerCoordinates) {
+            map.current?.flyTo({
+              center: centerCoordinates,
+              zoom: 16,
+              essential: true,
+            });
+          } else {
+            // Otherwise just zoom to a default view
+            map.current?.flyTo({
+              center: [-74.006, 40.7128], // Default to NYC
+              zoom: 10,
+              essential: true,
+            });
+          }
+        }
+      }, 5000); // Wait 5 seconds before fallback
+
+      return () => clearTimeout(timeoutId);
+    }
+  }, [mapLoaded, initialAnimationComplete, centerCoordinates]);
 
   // Add markers when map is loaded and users change
   useEffect(() => {

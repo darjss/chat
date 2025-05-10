@@ -1,5 +1,5 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { MapPin } from "lucide-react";
+import { MapPin, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface ChatMessageProps {
@@ -9,6 +9,7 @@ interface ChatMessageProps {
   time: string;
   distance: string;
   isIncoming?: boolean;
+  isSystem?: boolean;
 }
 
 export default function ChatMessage({
@@ -18,7 +19,21 @@ export default function ChatMessage({
   time,
   distance,
   isIncoming = true,
+  isSystem = false,
 }: ChatMessageProps) {
+  // For system messages, use a special layout
+  if (isSystem) {
+    return (
+      <div className="flex justify-center my-2">
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900/50 rounded-full border border-gray-700/50 max-w-[90%]">
+          <Info className="h-3 w-3 text-gray-400 flex-shrink-0" />
+          <span className="text-xs text-gray-300 truncate">{message}</span>
+          <span className="text-[10px] text-gray-500">{time}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
