@@ -6,7 +6,8 @@ import UserMenu from "./user-menu";
 export default function Header() {
   const links = [
     { to: "/", label: "Home" },
-      { to: "/dashboard", label: "Dashboard" },
+    { to: "/dashboard", label: "Dashboard" },
+    { to: "/chat", label: "Chat" },
     { to: "/ai", label: "AI Chat" },
   ];
 
@@ -19,7 +20,7 @@ export default function Header() {
               <NavLink
                 key={to}
                 to={to}
-                className={({ isActive }) => isActive ? "font-bold" : ""}
+                className={({ isActive }) => (isActive ? "font-bold" : "")}
                 end
               >
                 {label}

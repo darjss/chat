@@ -1,6 +1,6 @@
 import type { Route } from "./+types/_index";
-import { useQuery } from "@tanstack/react-query";
-  import { trpc } from "@/utils/trpc";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { trpc } from "@/utils/trpc";
 
 const TITLE_TEXT = `
  ██████╗ ███████╗████████╗████████╗███████╗██████╗
@@ -31,23 +31,21 @@ export default function Home() {
       <div className="grid gap-6">
         <section className="rounded-lg border p-4">
           <h2 className="mb-2 font-medium">API Status</h2>
-            <div className="flex items-center gap-2">
-              <div
-                className={`h-2 w-2 rounded-full ${
-                  healthCheck.data ? "bg-green-500" : "bg-red-500"
-                }`}
-              />
-              <span className="text-sm text-muted-foreground">
-                {healthCheck.isLoading
-                  ? "Checking..."
-                  : healthCheck.data
-                  ? "Connected"
-                  : "Disconnected"}
-              </span>
-              <span className="text-sm text-muted-foreground">
-                {redis.data}
-              </span>
-            </div>
+          <div className="flex items-center gap-2">
+            <div
+              className={`h-2 w-2 rounded-full ${
+                healthCheck.data ? "bg-green-500" : "bg-red-500"
+              }`}
+            />
+            <span className="text-sm text-muted-foreground">
+              {healthCheck.isLoading
+                ? "Checking..."
+                : healthCheck.data
+                ? "Connected"
+                : "Disconnected"}
+            </span>
+            <span className="text-sm text-muted-foreground">{redis.data}</span>
+          </div>
         </section>
       </div>
     </div>

@@ -17,7 +17,9 @@
     "db:generate": "turbo -F server db:generate",
     "db:migrate": "turbo -F server db:migrate"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@ampproject/remapping": "^2.3.0"
+  },
   "devDependencies": {
     "turbo": "^2.4.2"
   },
