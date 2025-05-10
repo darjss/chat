@@ -1,4 +1,5 @@
 
+import { redis } from "@/db/redis";
 import {
   protectedProcedure, publicProcedure,
   router,
@@ -13,6 +14,14 @@ export const appRouter = router({
       message: "This is private",
       user: ctx.session.user,
     };
+  }),
+  redis: publicProcedure.query(async () => {
+    const value = await redis.get("test") as string;
+    if (!value) {
+      await redis.set("test", "Hello, World!");
+      return await redis.get("test") as string;
+    }
+    return value;
   }),
 });
 export type AppRouter = typeof appRouter;

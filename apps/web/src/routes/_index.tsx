@@ -24,7 +24,7 @@ export function meta({}: Route.MetaArgs) {
 
 export default function Home() {
   const healthCheck = useQuery(trpc.healthCheck.queryOptions());
-  
+  const redis = useQuery(trpc.redis.queryOptions());
   return (
     <div className="container mx-auto max-w-3xl px-4 py-2">
       <pre className="overflow-x-auto font-mono text-sm">{TITLE_TEXT}</pre>
@@ -43,6 +43,9 @@ export default function Home() {
                   : healthCheck.data
                   ? "Connected"
                   : "Disconnected"}
+              </span>
+              <span className="text-sm text-muted-foreground">
+                {redis.data}
               </span>
             </div>
         </section>

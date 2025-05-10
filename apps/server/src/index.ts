@@ -7,7 +7,7 @@ import { createContext } from "./lib/context";
 import { appRouter } from "./routers/index";
 import { auth } from "./lib/auth";
 
-const app = new Hono();
+const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.use(logger());
 app.use(
@@ -22,17 +22,22 @@ app.use(
 
 app.on(["POST", "GET"], "/api/auth/**", (c) => auth.handler(c.req.raw));
 
+app.use(
+  "/trpc/*",
+  trpcServer({
+    router: appRouter,
+    createContext: (_opts, context) => {
+      return createContext({ context });
+    },
+  })
+);
 
-app.use("/trpc/*", trpcServer({
-  router: appRouter,
-  createContext: (_opts, context) => {
-    return createContext({ context });
-  },
-}));
+app.get("/", (c) => c.text("Hello World"));
 
-
-app.get("/", (c) => {
-  return c.text("OK");
+app.get("/chat-room/:id", (c) => {
+  const stub = c.env.CHAT_ROOM.get(c.env.CHAT_ROOM.idFromName(c.req.param("id")));
+  return stub.fetch(c.req.raw);
 });
 
+export { ChatRoom } from "./chat-room";
 export default app;

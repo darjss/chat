@@ -12,7 +12,9 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

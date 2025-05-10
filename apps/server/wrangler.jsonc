@@ -7,6 +7,21 @@
   "assets": {
     "directory": "./dist"
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "ChatRoom",
+        "name": "CHAT_ROOM"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["ChatRoom" ]
+    }
+  ],
   "vars": {
     "CORS_ORIGINS": "http://localhost:5173,https://chat-web-9h1.pages.dev",
     "BETTER_AUTH_SECRET": "your-secret-key",
