@@ -9,6 +9,7 @@ interface Message {
   content: string;
   createdAt: string;
   userName: string;
+  type?: "chat" | "system"; // Add type to differentiate system messages
 }
 
 const ChatPage: React.FC = () => {
@@ -19,8 +20,28 @@ const ChatPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const previousUsers = useRef<string[]>([]);
 
   const { data: session } = authClient.useSession();
+
+  // Effect to handle user join notifications
+  useEffect(() => {
+    const newUsers = users.filter(
+      (user) => !previousUsers.current.includes(user)
+    );
+    newUsers.forEach((user) => {
+      const joinMessage: Message = {
+        id: `join-${Date.now()}-${user}`,
+        content: `${user} joined the chat`,
+        createdAt: new Date().toISOString(),
+        userName: "System",
+        type: "system",
+      };
+      setMessages((prev) => [...prev, joinMessage]);
+    });
+    previousUsers.current = users;
+  }, [users]);
+
   const handleLocationSelect = (lat: number, lng: number, hash: string) => {
     setGeohash(hash);
     setError(null);
@@ -303,6 +324,7 @@ const ChatPage: React.FC = () => {
               <div className="space-y-4">
                 {messages.map((msg) => {
                   const isCurrentUser = msg.userName === session?.user?.name;
+                  const isSystemMessage = msg.type === "system";
 
                   return (
                     <motion.div
@@ -310,34 +332,54 @@ const ChatPage: React.FC = () => {
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       className={`flex ${
-                        isCurrentUser ? "justify-end" : "justify-start"
+                        isSystemMessage
+                          ? "justify-center"
+                          : isCurrentUser
+                          ? "justify-end"
+                          : "justify-start"
                       }`}
                     >
-                      <div
-                        className={`p-3 rounded-2xl max-w-xs lg:max-w-md break-words ${
-                          isCurrentUser
-                            ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-tr-none shadow-md"
-                            : "bg-white text-gray-800 rounded-tl-none shadow-md border border-gray-200"
-                        }`}
-                      >
+                      {isSystemMessage ? (
+                        <div className="bg-gradient-to-r from-indigo-100 to-purple-100 text-indigo-600 px-4 py-2 rounded-full text-sm shadow-sm border border-indigo-200 flex items-center">
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-4 w-4 mr-2"
+                            viewBox="0 0 20 20"
+                            fill="currentColor"
+                          >
+                            <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
+                          </svg>
+                          {msg.content}
+                        </div>
+                      ) : (
                         <div
-                          className={`font-medium text-sm mb-1 ${
+                          className={`p-3 rounded-2xl max-w-xs lg:max-w-md break-words ${
                             isCurrentUser
-                              ? "text-indigo-100"
-                              : "text-indigo-600"
+                              ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-tr-none shadow-md"
+                              : "bg-white text-gray-800 rounded-tl-none shadow-md border border-gray-200"
                           }`}
                         >
-                          {msg.userName}
+                          <div
+                            className={`font-medium text-sm mb-1 ${
+                              isCurrentUser
+                                ? "text-indigo-100"
+                                : "text-indigo-600"
+                            }`}
+                          >
+                            {msg.userName}
+                          </div>
+                          <div className="text-sm">{msg.content}</div>
+                          <div
+                            className={`text-xs mt-1 ${
+                              isCurrentUser
+                                ? "text-indigo-200"
+                                : "text-gray-500"
+                            }`}
+                          >
+                            {formatTime(msg.createdAt)}
+                          </div>
                         </div>
-                        <div className="text-sm">{msg.content}</div>
-                        <div
-                          className={`text-xs mt-1 ${
-                            isCurrentUser ? "text-indigo-200" : "text-gray-500"
-                          }`}
-                        >
-                          {formatTime(msg.createdAt)}
-                        </div>
-                      </div>
+                      )}
                     </motion.div>
                   );
                 })}
