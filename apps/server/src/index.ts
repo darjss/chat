@@ -13,7 +13,7 @@ app.use(logger());
 app.use(
   "/*",
   cors({
-    origin: process.env.CORS_ORIGIN || "",
+    origin:  "http://localhost:5173",
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -35,7 +35,9 @@ app.use(
 app.get("/", (c) => c.text("Hello World"));
 
 app.get("/chat-room/:id", (c) => {
-  const stub = c.env.CHAT_ROOM.get(c.env.CHAT_ROOM.idFromName(c.req.param("id")));
+  const stub = c.env.CHAT_ROOM.get(
+    c.env.CHAT_ROOM.idFromName(c.req.param("id"))
+  );
   return stub.fetch(c.req.raw);
 });
 
