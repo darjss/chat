@@ -22,6 +22,9 @@
       "deleted_classes": ["Counter"]
     }
   ],
+  "observability": {
+    "enabled": true
+  },
   "vars": {
     "CORS_ORIGINS": "https://chat-web-9h1.pages.dev",
     "BETTER_AUTH_SECRET": "your-secret-key",

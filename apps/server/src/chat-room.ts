@@ -40,9 +40,21 @@ export class ChatRoom extends DurableObject {
     this.sessions.push({ userName: session.user.name, socket: server });
     const recentMessages = this.messages.slice(-20);
     server.send(JSON.stringify({ messages: recentMessages, type: "history" }));
+    server.send(
+      JSON.stringify({
+        users: JSON.stringify(this.sessions.map((s) => s.userName)),
+        type: "users",
+      })
+    );
 
     server.addEventListener("close", () => {
       this.sessions = this.sessions.filter((s) => s.socket !== server);
+      server.send(
+        JSON.stringify({
+          users: JSON.stringify(this.sessions.map((s) => s.userName)),
+          type: "users",
+        })
+      );
     });
     server.addEventListener("message", (event) => {
       const message = JSON.parse(event.data as string) as Message;

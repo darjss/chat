@@ -11,6 +11,14 @@ export const auth = betterAuth({
     
     schema: schema,
   }),
+  "advanced":{
+    defaultCookieAttributes: {
+      secure: true,
+      httpOnly: true,
+      sameSite: "none",  
+      partitioned: true, 
+  },
+  },
   trustedOrigins: [
     process.env.CORS_ORIGIN || "",
   ],
