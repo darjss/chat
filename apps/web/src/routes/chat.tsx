@@ -1,22 +1,51 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import Map from "../components/map";
 import ngeohash from "ngeohash";
 import { authClient } from "@/lib/auth-client";
 import { motion } from "framer-motion";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Send,
+  Smile,
+  Paperclip,
+  MapPin,
+  Users,
+  Menu,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
+import MapComponent from "@/components/map-component";
+import ChatMessage from "@/components/chat-message";
+import { useMobile } from "@/hooks/use-mobile";
 
 interface Message {
   id: string;
   content: string;
   createdAt: string;
   userName: string;
-  type?: "chat" | "system"; // Add type to differentiate system messages
 }
 
-const ChatPage: React.FC = () => {
+interface User {
+  id: number;
+  name: string;
+  avatar: string;
+  coordinates: [number, number];
+  distance?: string;
+  isUser?: boolean;
+}
+
+export default function ChatPage() {
+  const isMobile = useMobile();
+  const [mapExpanded, setMapExpanded] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [users, setUsers] = useState<string[]>([]);
   const [newMessage, setNewMessage] = useState("");
   const [geohash, setGeohash] = useState<string | null>(null);
+  const [currentUserCoordinates, setCurrentUserCoordinates] = useState<
+    [number, number] | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -45,6 +74,93 @@ const ChatPage: React.FC = () => {
   const handleLocationSelect = (lat: number, lng: number, hash: string) => {
     setGeohash(hash);
     setError(null);
+
+  const precision = 6; // Geohash precision
+
+  // Geolocation logic moved here from MapComponent
+  useEffect(() => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const coordinates: [number, number] = [
+            pos.coords.longitude,
+            pos.coords.latitude,
+          ];
+          setCurrentUserCoordinates(coordinates);
+          const hash = ngeohash.encode(
+            pos.coords.latitude,
+            pos.coords.longitude,
+            precision
+          );
+          setGeohash(hash);
+          setError(null);
+        },
+        (err) => {
+          console.error("Initial geolocation error:", err);
+          setError("Getting your location..."); // Initial user-friendly message
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              const coordinates: [number, number] = [
+                pos.coords.longitude,
+                pos.coords.latitude,
+              ];
+              setCurrentUserCoordinates(coordinates);
+              const hash = ngeohash.encode(
+                pos.coords.latitude,
+                pos.coords.longitude,
+                precision
+              );
+              setGeohash(hash);
+              setError(null);
+            },
+            (errFallback) => {
+              console.error("Fallback geolocation error:", errFallback);
+              setError(
+                "Unable to get your location. Please check your location settings."
+              );
+            },
+            { enableHighAccuracy: false, timeout: 5000, maximumAge: 0 }
+          );
+        },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+      );
+
+      const watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const coordinates: [number, number] = [
+            pos.coords.longitude,
+            pos.coords.latitude,
+          ];
+          setCurrentUserCoordinates(coordinates);
+          const hash = ngeohash.encode(
+            pos.coords.latitude,
+            pos.coords.longitude,
+            precision
+          );
+          setGeohash(hash); // Keep geohash updated for WebSocket connection
+          setError(null); // Clear error on successful watch update
+        },
+        (err) => {
+          console.error("Geolocation watch error:", err);
+          setError(
+            "Location tracking paused. Please check your location settings."
+          );
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 10000 }
+      );
+
+      return () => {
+        navigator.geolocation.clearWatch(watchId);
+      };
+    } else {
+      setError("Geolocation is not supported by your browser.");
+    }
+    // Dependencies: precision. setError, setGeohash, setCurrentUserCoordinates are stable setters from useState.
+  }, [precision]); // Only precision is a non-setter dependency here.
+
+  // Toggle map expansion on mobile
+  const toggleMap = () => {
+    setMapExpanded(!mapExpanded);
   };
 
   useEffect(() => {
@@ -137,8 +253,6 @@ const ChatPage: React.FC = () => {
     }
   };
 
-  const precision = 6; // You can adjust geohash precision
-
   const formatTime = (dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleTimeString([], {
@@ -147,177 +261,124 @@ const ChatPage: React.FC = () => {
     });
   };
 
+  // Remove the mockUsers array and create a computed users array based on actual data
+  const mapUsers = useMemo(() => {
+    if (!geohash) return [];
+
+    const currentUser: User = {
+      id: 1,
+      name: session?.user?.name || "You",
+      avatar: session?.user?.image || "/placeholder.svg",
+      coordinates: currentUserCoordinates || ([0, 0] as [number, number]),
+      isUser: true,
+      distance: "nearby",
+    };
+
+    // Convert connected users to map users
+    const otherUsers: User[] = users.map((userName, index) => ({
+      id: index + 2,
+      name: userName,
+      avatar: "/placeholder.svg",
+      coordinates: [0, 0] as [number, number], // Explicitly type as tuple
+      distance: "nearby",
+    }));
+
+    return [currentUser, ...otherUsers];
+  }, [
+    geohash,
+    users,
+    session?.user?.name,
+    session?.user?.image,
+    currentUserCoordinates,
+  ]);
+  console.log(mapUsers);
   return (
-    <div className="min-h-[calc(100vh-4rem)] bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 p-4 sm:p-6">
-      <div className="container mx-auto max-w-7xl">
-        <div className="flex flex-col lg:flex-row gap-6 h-[calc(100vh-8rem)]">
-          {/* Map Section */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="lg:w-2/5 flex flex-col gap-4"
-          >
-            <div className="bg-white rounded-2xl overflow-hidden shadow-lg border border-purple-100 h-full">
-              <div className="p-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white">
-                <h2 className="text-xl font-bold flex items-center">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5 mr-2"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  GeoChat Map
+    <main className="flex min-h-screen flex-col bg-gradient-to-br from-gray-900 via-purple-950 to-black overflow-hidden">
+      <div className="relative w-full h-screen flex flex-col">
+        {/* Animated background */}
+        <div className="absolute inset-0">
+          <div className="absolute top-0 left-0 w-full h-full opacity-20 bg-[radial-gradient(circle_at_50%_50%,rgba(120,0,255,0.5),transparent_70%)]"></div>
+          <div className="absolute top-1/3 right-1/4 w-96 h-96 bg-purple-600 rounded-full mix-blend-screen filter blur-3xl opacity-20 animate-pulse"></div>
+          <div
+            className="absolute bottom-1/4 left-1/3 w-64 h-64 bg-blue-600 rounded-full mix-blend-screen filter blur-3xl opacity-10 animate-pulse"
+            style={{ animationDelay: "1s" }}
+          ></div>
+        </div>
+
+        {/* Content container */}
+        <div className="relative z-10 flex flex-col h-full p-2 sm:p-4">
+          {/* Header */}
+          <header className="flex items-center justify-between mb-2 sm:mb-4 px-3 py-2 sm:px-4 sm:py-3 bg-black/40 backdrop-blur-md rounded-xl sm:rounded-2xl border border-white/10">
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg sm:text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-400">
+                Proximity Chat
+              </h1>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full bg-white/5 hover:bg-white/10"
+              >
+                <Users className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full bg-white/5 hover:bg-white/10"
+              >
+                <Menu className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
+              </Button>
+              <div className="relative">
+                <Avatar className="h-8 w-8 sm:h-9 sm:w-9 border-2 border-purple-500">
+                  <AvatarImage src="/placeholder.svg?height=36&width=36" />
+                  <AvatarFallback className="bg-purple-950 text-purple-200">
+                    {session?.user?.name?.substring(0, 2).toUpperCase() || "ME"}
+                  </AvatarFallback>
+                </Avatar>
+                <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-green-500 rounded-full border-2 border-black"></span>
+              </div>
+            </div>
+          </header>
+
+          {/* Main content - Mobile first layout */}
+          <div className="flex flex-col lg:flex-row flex-1 gap-2 sm:gap-4 h-full overflow-hidden">
+            {/* Map section - Smaller on mobile, expandable */}
+            <div
+              className={`
+                w-full lg:w-80 rounded-xl sm:rounded-2xl overflow-hidden backdrop-blur-md bg-black/30 border border-white/10 
+                ${
+                  isMobile
+                    ? mapExpanded
+                      ? "h-[60vh]"
+                      : "h-[30vh]"
+                    : "flex-shrink-0"
+                }
+                transition-all duration-300 ease-in-out
+              `}
+            >
+              <div className="p-2 sm:p-3 bg-black/50 border-b border-white/5 flex items-center justify-between">
+                <h2 className="text-sm font-medium text-purple-300 flex items-center gap-1">
+                  <MapPin className="h-3 w-3 sm:h-4 sm:w-4" /> Nearby Users
                 </h2>
-              </div>
-              <Map
-                onLocationSelect={handleLocationSelect}
-                precision={precision}
-              />
-            </div>
-
-            {error && (
-              <motion.div
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="bg-red-50 rounded-xl p-4 text-red-600 border-l-4 border-red-500 shadow-md"
-              >
-                <div className="flex items-center">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5 mr-2"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  {error}
-                </div>
-              </motion.div>
-            )}
-
-            {geohash && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.2 }}
-                className="bg-gradient-to-r from-purple-500 to-indigo-500 text-white p-3 rounded-xl shadow-md flex items-center"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5 mr-2"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path
-                    fillRule="evenodd"
-                    d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z"
-                    clipRule="evenodd"
-                  />
-                </svg>
-                <span className="font-medium">Active Location:</span>
-                <code className="ml-2 bg-white bg-opacity-20 px-2 py-1 rounded-md text-sm">
-                  {geohash}
-                </code>
-              </motion.div>
-            )}
-          </motion.div>
-
-          {/* Chat Section */}
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.2 }}
-            className="lg:w-3/5 flex flex-col bg-white rounded-2xl shadow-lg overflow-hidden border border-purple-100"
-          >
-            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white p-4 flex justify-between items-center">
-              <h2 className="text-xl font-bold flex items-center">
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  className="h-5 w-5 mr-2"
-                  viewBox="0 0 20 20"
-                  fill="currentColor"
-                >
-                  <path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z" />
-                  <path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z" />
-                </svg>
-                GeoChat Room
-              </h2>
-              {users.length > 0 && (
-                <div className="bg-white bg-opacity-20 py-1 px-3 rounded-full text-sm font-medium backdrop-blur-sm">
-                  {users.length} {users.length === 1 ? "user" : "users"} online
-                </div>
-              )}
-            </div>
-
-            {users.length > 0 && (
-              <div className="px-4 py-2 border-b border-gray-100 flex gap-1 flex-wrap bg-indigo-50">
-                <span className="text-xs text-indigo-600 mr-2 font-medium">
-                  Active users:
-                </span>
-                {users.map((user, index) => (
-                  <span
-                    key={index}
-                    className="text-xs bg-indigo-100 text-indigo-600 py-1 px-2 rounded-full flex items-center"
-                  >
-                    <span className="w-2 h-2 bg-green-400 rounded-full mr-1"></span>
-                    {user}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-purple-300/70">
+                    {users.length} online
                   </span>
-                ))}
-              </div>
-            )}
-
-            <div className="flex-grow p-4 overflow-y-auto bg-gray-50 backdrop-blur-sm">
-              {messages.length === 0 && !geohash && (
-                <div className="flex items-center justify-center h-full">
-                  <motion.div
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ duration: 0.5 }}
-                    className="text-center max-w-sm p-8 bg-white rounded-xl shadow-lg border border-indigo-100"
-                  >
-                    <div className="text-5xl mb-4 bg-indigo-100 w-20 h-20 flex items-center justify-center rounded-full mx-auto text-indigo-600">
-                      📍
-                    </div>
-                    <div className="font-bold text-xl mb-2 text-indigo-800">
-                      Select a location
-                    </div>
-                    <p className="text-indigo-600">
-                      Please allow location access or select a location on the
-                      map to join a chat room.
-                    </p>
-                  </motion.div>
-                </div>
-              )}
-
-              {messages.length === 0 && geohash && (
-                <div className="flex items-center justify-center h-full">
-                  <motion.div
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ duration: 0.5 }}
-                    className="text-center max-w-sm p-8 bg-white rounded-xl shadow-lg border border-purple-100"
-                  >
-                    <div className="text-5xl mb-4 bg-purple-100 w-20 h-20 flex items-center justify-center rounded-full mx-auto text-purple-600">
-                      💬
-                    </div>
-                    <div className="font-bold text-xl mb-2 text-purple-800">
-                      No messages yet
-                    </div>
-                    <p className="text-purple-600">
-                      Be the first to say something in this area!
-                    </p>
-                  </motion.div>
+                  {isMobile && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 rounded-full"
+                      onClick={toggleMap}
+                    >
+                      {mapExpanded ? (
+                        <ChevronDown className="h-4 w-4 text-purple-300" />
+                      ) : (
+                        <ChevronUp className="h-4 w-4 text-purple-300" />
+                      )}
+                    </Button>
+                  )}
                 </div>
               )}
 
@@ -383,72 +444,78 @@ const ChatPage: React.FC = () => {
                     </motion.div>
                   );
                 })}
-                <div ref={messagesEndRef} />
+              </div>
+
+              <div className="relative w-full h-full">
+                <MapComponent
+                  users={mapUsers}
+                  centerCoordinates={currentUserCoordinates}
+                  geolocationError={error}
+                />
               </div>
             </div>
 
-            <div className="p-4 border-t border-gray-200 bg-white">
-              {geohash ? (
-                <div className="flex gap-2 items-center">
-                  <input
-                    type="text"
-                    value={newMessage}
-                    onChange={(e) => setNewMessage(e.target.value)}
-                    onKeyPress={(e) => e.key === "Enter" && sendMessage()}
-                    placeholder="Type your message..."
-                    className="flex-grow p-3 border border-indigo-200 rounded-full focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-sm transition-all duration-200"
-                    disabled={
-                      !ws.current || ws.current.readyState !== WebSocket.OPEN
-                    }
+            {/* Chat section - Larger on mobile */}
+            <div className="flex flex-col flex-1 rounded-xl sm:rounded-2xl overflow-hidden backdrop-blur-md bg-black/30 border border-white/10">
+              {/* Chat messages */}
+              <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 scrollbar-thin scrollbar-thumb-purple-900 scrollbar-track-transparent">
+                {messages.map((msg) => (
+                  <ChatMessage
+                    key={msg.id}
+                    avatar="/placeholder.svg"
+                    name={msg.userName}
+                    message={msg.content}
+                    time={formatTime(msg.createdAt)}
+                    distance="nearby"
+                    isIncoming={msg.userName !== session?.user?.name}
                   />
-                  <button
-                    onClick={sendMessage}
-                    className={`bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white font-medium py-3 px-6 rounded-full disabled:opacity-50 transition-all duration-200 flex items-center justify-center shadow-md ${
-                      !ws.current ||
-                      ws.current.readyState !== WebSocket.OPEN ||
-                      !newMessage.trim()
-                        ? "opacity-50 cursor-not-allowed"
-                        : "transform hover:scale-105"
-                    }`}
-                    disabled={
-                      !ws.current ||
-                      ws.current.readyState !== WebSocket.OPEN ||
-                      !newMessage.trim()
-                    }
+                ))}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* Chat input */}
+              <div className="p-2 sm:p-4 bg-black/50 border-t border-white/5">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full bg-white/5 hover:bg-white/10 h-8 w-8 sm:h-10 sm:w-10"
                   >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                    >
-                      <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
-                    </svg>
-                  </button>
-                </div>
-              ) : (
-                <div className="bg-indigo-50 text-indigo-600 py-4 px-4 rounded-xl border border-indigo-100 shadow-inner flex items-center justify-center">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5 mr-2"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z"
-                      clipRule="evenodd"
+                    <Paperclip className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
+                  </Button>
+                  <div className="relative flex-1">
+                    <Input
+                      value={newMessage}
+                      onChange={(e) => setNewMessage(e.target.value)}
+                      onKeyPress={(e) => e.key === "Enter" && sendMessage()}
+                      placeholder="Type a message..."
+                      className="bg-white/5 border-white/10 rounded-full pl-4 pr-12 py-5 sm:py-6 focus-visible:ring-purple-500 placeholder:text-gray-400"
                     />
-                  </svg>
-                  Select a location on the map to start chatting
+                    <Button
+                      onClick={sendMessage}
+                      disabled={
+                        !ws.current ||
+                        ws.current.readyState !== WebSocket.OPEN ||
+                        !newMessage.trim()
+                      }
+                      className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 h-8 w-8 sm:h-10 sm:w-10 p-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <Send className="h-4 w-4 sm:h-5 sm:w-5" />
+                    </Button>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="rounded-full bg-white/5 hover:bg-white/10 h-8 w-8 sm:h-10 sm:w-10"
+                  >
+                    <Smile className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
+                  </Button>
                 </div>
-              )}
+              </div>
             </div>
-          </motion.div>
+          </div>
         </div>
       </div>
-    </div>
+    </main>
   );
-};
-
-export default ChatPage;
+}

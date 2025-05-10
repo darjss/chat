@@ -80,8 +80,10 @@ function LocationMarker({
       const pos: [number, number] = [lat, lng];
       setPosition(pos);
       map.setView(pos, map.getZoom() || 18);
-
+      const start = performance.now();
       const hash = ngeohash.encode(lat, lng, precision);
+      const end = performance.now();
+      console.log(`Encoding took ${end - start}ms`);
       setGeohash(hash);
       // Store the new geohash in localStorage
       localStorage.setItem("currentGeohash", hash);
