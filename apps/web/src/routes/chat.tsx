@@ -53,31 +53,13 @@ export default function ChatPage() {
 
   const { data: session } = authClient.useSession();
 
-  // Effect to handle user join notifications
-  useEffect(() => {
-    const newUsers = users.filter(
-      (user) => !previousUsers.current.includes(user)
-    );
-    newUsers.forEach((user) => {
-      const joinMessage: Message = {
-        id: `join-${Date.now()}-${user}`,
-        content: `${user} joined the chat`,
-        createdAt: new Date().toISOString(),
-        userName: "System",
-        type: "system",
-      };
-      setMessages((prev) => [...prev, joinMessage]);
-    });
-    previousUsers.current = users;
-  }, [users]);
-
   const handleLocationSelect = (lat: number, lng: number, hash: string) => {
     setGeohash(hash);
     setError(null);
+  };
 
-  const precision = 6; // Geohash precision
+  const precision = 6;
 
-  // Geolocation logic moved here from MapComponent
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -97,7 +79,7 @@ export default function ChatPage() {
         },
         (err) => {
           console.error("Initial geolocation error:", err);
-          setError("Getting your location..."); // Initial user-friendly message
+          setError("Getting your location...");
           navigator.geolocation.getCurrentPosition(
             (pos) => {
               const coordinates: [number, number] = [
@@ -137,8 +119,8 @@ export default function ChatPage() {
             pos.coords.longitude,
             precision
           );
-          setGeohash(hash); // Keep geohash updated for WebSocket connection
-          setError(null); // Clear error on successful watch update
+          setGeohash(hash);
+          setError(null);
         },
         (err) => {
           console.error("Geolocation watch error:", err);
@@ -155,8 +137,7 @@ export default function ChatPage() {
     } else {
       setError("Geolocation is not supported by your browser.");
     }
-    // Dependencies: precision. setError, setGeohash, setCurrentUserCoordinates are stable setters from useState.
-  }, [precision]); // Only precision is a non-setter dependency here.
+  }, [precision]);
 
   // Toggle map expansion on mobile
   const toggleMap = () => {
@@ -274,12 +255,11 @@ export default function ChatPage() {
       distance: "nearby",
     };
 
-    // Convert connected users to map users
     const otherUsers: User[] = users.map((userName, index) => ({
       id: index + 2,
       name: userName,
       avatar: "/placeholder.svg",
-      coordinates: [0, 0] as [number, number], // Explicitly type as tuple
+      coordinates: [0, 0] as [number, number],
       distance: "nearby",
     }));
 
@@ -341,23 +321,21 @@ export default function ChatPage() {
             </div>
           </header>
 
-          {/* Main content - Mobile first layout */}
           <div className="flex flex-col lg:flex-row flex-1 gap-2 sm:gap-4 h-full overflow-hidden">
-            {/* Map section - Smaller on mobile, expandable */}
             <div
               className={`
-                w-full lg:w-80 rounded-xl sm:rounded-2xl overflow-hidden backdrop-blur-md bg-black/30 border border-white/10 
+                w-full lg:w-96 rounded-xl sm:rounded-2xl overflow-hidden backdrop-blur-md bg-black/30 border border-white/10 flex flex-col
                 ${
                   isMobile
                     ? mapExpanded
                       ? "h-[60vh]"
                       : "h-[30vh]"
-                    : "flex-shrink-0"
+                    : "flex-shrink-0" /* On desktop, height is determined by the parent flex row; it will stretch. */
                 }
                 transition-all duration-300 ease-in-out
               `}
             >
-              <div className="p-2 sm:p-3 bg-black/50 border-b border-white/5 flex items-center justify-between">
+              <div className="p-2 sm:p-3 bg-black/50 border-b border-white/5 flex items-center justify-between flex-shrink-0">
                 <h2 className="text-sm font-medium text-purple-300 flex items-center gap-1">
                   <MapPin className="h-3 w-3 sm:h-4 sm:w-4" /> Nearby Users
                 </h2>
@@ -380,27 +358,21 @@ export default function ChatPage() {
                     </Button>
                   )}
                 </div>
-              )}
+              </div>
 
               <div className="space-y-4">
                 {messages.map((msg) => {
                   const isCurrentUser = msg.userName === session?.user?.name;
-                  const isSystemMessage = msg.type === "system";
-
                   return (
                     <motion.div
                       key={msg.id}
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
                       className={`flex ${
-                        isSystemMessage
-                          ? "justify-center"
-                          : isCurrentUser
-                          ? "justify-end"
-                          : "justify-start"
+                        isCurrentUser ? "justify-end" : "justify-start"
                       }`}
                     >
-                      {isSystemMessage ? (
+                      {isCurrentUser ? (
                         <div className="bg-gradient-to-r from-indigo-100 to-purple-100 text-indigo-600 px-4 py-2 rounded-full text-sm shadow-sm border border-indigo-200 flex items-center">
                           <svg
                             xmlns="http://www.w3.org/2000/svg"
@@ -446,7 +418,7 @@ export default function ChatPage() {
                 })}
               </div>
 
-              <div className="relative w-full h-full">
+              <div className="relative w-full flex-1">
                 <MapComponent
                   users={mapUsers}
                   centerCoordinates={currentUserCoordinates}

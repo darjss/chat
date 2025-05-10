@@ -35,9 +35,6 @@ export default function MapComponent({
   const map = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<{ [key: number]: mapboxgl.Marker }>({});
   const [mapLoaded, setMapLoaded] = useState(false);
-  // Removed userLocation and error state here
-
-  // Geolocation useEffect has been removed from here
 
   useEffect(() => {
     if (!mapContainer.current) return;
@@ -47,10 +44,17 @@ export default function MapComponent({
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: "mapbox://styles/mapbox/dark-v11",
-      center: [-74.006, 40.7128], // Default center, will be updated by flyTo
-      zoom: 12, // Adjusted default zoom
+      projection: "globe", // Display the map as a globe
+      center: [-74.006, 40.7128], // Initial center, will be overridden
+      zoom: 1, // Initial zoom to see the globe
       attributionControl: false,
       logoPosition: "bottom-left",
+    });
+
+    map.current.on("style.load", () => {
+      if (map.current) {
+        map.current.setFog({}); // Add atmosphere for globe view
+      }
     });
 
     map.current.on("load", () => {
@@ -68,11 +72,49 @@ export default function MapComponent({
   // New useEffect to center the map when centerCoordinates prop changes
   useEffect(() => {
     if (map.current && mapLoaded && centerCoordinates) {
-      map.current.flyTo({
-        center: centerCoordinates,
-        zoom: 16, // Zoom in when user location is available
-        essential: true,
-      });
+      const spinGlobeAndFly = async () => {
+        if (!map.current) return;
+
+        // 1. Zoom out to see the globe
+        map.current.easeTo({
+          center: [0, 0], // Center on a neutral point for globe view
+          zoom: 0.5,
+          duration: 1000, // 1 second to zoom out
+          essential: true,
+        });
+
+        // Wait for zoom out to complete
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        // 2. Spin the globe
+        const spinDuration = 1500; // 4 seconds for spinning
+        const revolutions = 1;
+        const startTime = performance.now();
+
+        const spin = (timestamp: number) => {
+          if (!map.current) return;
+          const elapsedTime = timestamp - startTime;
+          if (elapsedTime < spinDuration) {
+            const rotation = (elapsedTime / spinDuration) * 360 * revolutions;
+            map.current.setCenter([rotation % 360, 0]); // Rotate by changing longitude
+            requestAnimationFrame(spin);
+          } else {
+            // 3. Fly to the target location
+            if (map.current && centerCoordinates) {
+              // Re-check centerCoordinates
+              map.current.flyTo({
+                center: centerCoordinates,
+                zoom: 16,
+                essential: true,
+                duration: 3000, // 3 seconds to fly in
+              });
+            }
+          }
+        };
+        requestAnimationFrame(spin);
+      };
+
+      spinGlobeAndFly();
     }
   }, [centerCoordinates, mapLoaded]);
 
