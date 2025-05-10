@@ -12,7 +12,7 @@ const MAPBOX_TOKEN =
   "pk.eyJ1Ijoic291bmRicnVoIiwiYSI6ImNtYWlmeW8zODA2NW8yanM3NTVrbnZicHUifQ.zAlsz8FbfH8N4sUadaCylA";
 
 interface User {
-  id: number;
+  id: number
   name: string;
   avatar: string;
   coordinates: [number, number];
@@ -122,16 +122,14 @@ export default function MapComponent({
   useEffect(() => {
     if (!map.current || !mapLoaded) return;
 
+    // Remove existing markers
     Object.values(markersRef.current).forEach((marker) => marker.remove());
     markersRef.current = {};
 
     console.log("MapComponent users prop:", users);
 
-    const currentUser = users.find((u) => u.isUser);
-
-    console.log("MapComponent currentUser:", currentUser);
-
-    if (currentUser) {
+    // Create markers for all users
+    users.forEach((user) => {
       const markerEl = document.createElement("div");
       markerEl.className = "relative z-[999]";
       const root = createRoot(markerEl);
@@ -139,10 +137,10 @@ export default function MapComponent({
       root.render(
         <UserAvatar
           position={{ top: "50%", left: "50%" }}
-          image={currentUser.avatar}
-          name={currentUser.name}
-          distance={currentUser.distance}
-          isUser={currentUser.isUser}
+          image={user.avatar}
+          name={user.name}
+          distance={user.distance}
+          isUser={user.isUser}
         />
       );
 
@@ -150,11 +148,11 @@ export default function MapComponent({
         element: markerEl,
         anchor: "center",
       })
-        .setLngLat(currentUser.coordinates)
+        .setLngLat(user.coordinates)
         .addTo(map.current!);
 
-      markersRef.current[currentUser.id] = marker;
-    }
+      markersRef.current[user.id] = marker;
+    });
   }, [users, mapLoaded]);
 
   // Use geolocationError prop for error display

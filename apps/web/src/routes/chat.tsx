@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import Map from "../components/map";
+
 import ngeohash from "ngeohash";
 import { authClient } from "@/lib/auth-client";
 import { motion } from "framer-motion";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -223,8 +222,9 @@ export default function ChatPage() {
       ws.current &&
       ws.current.readyState === WebSocket.OPEN
     ) {
+      const randomId = Math.random().toString(36).substring(2, 15);
       const messageData: Message = {
-        id: new Date().toISOString(), // Simple ID generation
+        id: new Date().toISOString() + randomId+"-"+session?.user?.name, // Simple ID generation
         content: newMessage,
         createdAt: new Date().toISOString(),
         userName: session?.user?.name || "Anonymous",
@@ -287,8 +287,6 @@ export default function ChatPage() {
 
         {/* Content container */}
         <div className="relative z-10 flex flex-col h-full p-2 sm:p-4">
-         
-
           <div className="flex flex-col lg:flex-row flex-1 gap-2 sm:gap-4 h-full overflow-hidden">
             <div
               className={`
@@ -327,7 +325,7 @@ export default function ChatPage() {
                   )}
                 </div>
               </div>
-
+              {/* 
               <div className="space-y-4">
                 {messages.map((msg) => {
                   const isCurrentUser = msg.userName === session?.user?.name;
@@ -384,7 +382,7 @@ export default function ChatPage() {
                     </motion.div>
                   );
                 })}
-              </div>
+              </div> */}
 
               <div className="relative w-full flex-1">
                 <MapComponent
@@ -398,7 +396,7 @@ export default function ChatPage() {
             {/* Chat section - Larger on mobile */}
             <div className="flex flex-col flex-1 rounded-xl sm:rounded-2xl overflow-hidden backdrop-blur-md bg-black/30 border border-white/10">
               {/* Chat messages */}
-              <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 scrollbar-thin scrollbar-thumb-purple-900 scrollbar-track-transparent">
+              <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 scrollbar-thin scrollbar-thumb-purple-900 scrollbar-track-transparent flex flex-col">
                 {messages.map((msg) => (
                   <ChatMessage
                     key={msg.id}
