@@ -13,7 +13,7 @@ app.use(logger());
 app.use(
   "/*",
   cors({
-    origin:  ["http://localhost:5173",],
+    origin: ["http://localhost:5173", "https://chat-web-9h1.pages.dev"],
     allowMethods: ["GET", "POST", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: true,
