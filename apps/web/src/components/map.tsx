@@ -9,7 +9,7 @@ import {
 } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { Icon } from "leaflet";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import ngeohash from "ngeohash";
 
 // Fix for default marker icon
@@ -39,24 +39,32 @@ function LocationMarker({
   >(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Memoize updatePosition to prevent unnecessary re-renders
+  const updatePosition = useCallback(
+    (lat: number, lng: number) => {
+      const pos: [number, number] = [lat, lng];
+      setPosition(pos);
+      map.setView(pos, map.getZoom() || 18);
+
+      const hash = ngeohash.encode(lat, lng, precision);
+      setGeohash(hash);
+      // Store the new geohash in localStorage
+      localStorage.setItem("currentGeohash", hash);
+
+      const bbox = ngeohash.decode_bbox(hash);
+      setBounds([
+        [bbox[0], bbox[1]],
+        [bbox[2], bbox[3]],
+      ]);
+      onLocationSelect(lat, lng, hash);
+      setError(null);
+    },
+    [map, precision, onLocationSelect]
+  );
+
+  // Effect for geolocation tracking
   useEffect(() => {
     if (navigator.geolocation) {
-      const updatePosition = (lat: number, lng: number) => {
-        const pos: [number, number] = [lat, lng];
-        setPosition(pos);
-        map.setView(pos, map.getZoom() || 18);
-
-        const hash = ngeohash.encode(lat, lng, precision);
-        setGeohash(hash);
-        const bbox = ngeohash.decode_bbox(hash);
-        setBounds([
-          [bbox[0], bbox[1]],
-          [bbox[2], bbox[3]],
-        ]);
-        onLocationSelect(lat, lng, hash);
-        setError(null);
-      };
-
       // Try to get position with a shorter timeout first
       navigator.geolocation.getCurrentPosition(
         (pos) => {
@@ -112,7 +120,30 @@ function LocationMarker({
         navigator.geolocation.clearWatch(watchId);
       };
     }
-  }, [map, onLocationSelect, precision]);
+  }, [updatePosition]);
+
+  // Effect for periodic geohash comparison
+  useEffect(() => {
+    // Initial check for stored geohash
+    const storedGeohash = localStorage.getItem("currentGeohash");
+    if (storedGeohash && storedGeohash !== geohash && position) {
+      // If there's a mismatch, update to current position
+      updatePosition(position[0], position[1]);
+    }
+
+    // Set up interval for checking geohash
+    const intervalId = setInterval(() => {
+      const storedGeohash = localStorage.getItem("currentGeohash");
+      if (storedGeohash && storedGeohash !== geohash && position) {
+        // If there's a mismatch, update to current position
+        updatePosition(position[0], position[1]);
+      }
+    }, 10000); // Check every 10 seconds
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [geohash, position, updatePosition]);
 
   const handleMarkerDrag = (e: any) => {
     const newPos = e.target.getLatLng();
