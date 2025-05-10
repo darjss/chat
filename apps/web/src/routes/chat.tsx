@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import Map from "../components/map";
 import ngeohash from "ngeohash";
+import { authClient } from "@/lib/auth-client";
 
 interface Message {
   id: string;
@@ -18,6 +19,7 @@ const ChatPage: React.FC = () => {
   const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const { data: session } = authClient.useSession()
   const handleLocationSelect = (lat: number, lng: number, hash: string) => {
     setGeohash(hash);
     setError(null);
@@ -95,7 +97,7 @@ const ChatPage: React.FC = () => {
       }
     };
   }, [geohash]);
-
+  console.log(messages);
   const sendMessage = () => {
     if (
       newMessage.trim() &&
@@ -106,8 +108,7 @@ const ChatPage: React.FC = () => {
         id: new Date().toISOString(), // Simple ID generation
         content: newMessage,
         createdAt: new Date().toISOString(),
-        // userName will be handled by the server based on the session
-        userName: "You", // Placeholder, server should override
+        userName: session?.user?.name || "Anonymous",
       };
       ws.current.send(JSON.stringify(messageData));
       setNewMessage("");
@@ -190,12 +191,14 @@ const ChatPage: React.FC = () => {
               <div
                 key={msg.id}
                 className={`flex ${
-                  msg.userName === "You" ? "justify-end" : "justify-start"
+                  msg.userName === session?.user?.name
+                    ? "justify-end"
+                    : "justify-start"
                 }`}
               >
                 <div
                   className={`p-3 rounded-2xl max-w-xs lg:max-w-md break-words shadow-sm transition-all duration-200 ${
-                    msg.userName === "You"
+                    msg.userName === session?.user?.name
                       ? "bg-blue-500 text-white rounded-tr-none"
                       : "bg-white text-gray-800 rounded-tl-none border border-gray-100"
                   }`}
