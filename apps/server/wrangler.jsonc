@@ -22,6 +22,12 @@
       "deleted_classes": ["Counter"]
     }
   ],
+  "r2_buckets": [
+    {
+      "binding": "FILE_STORAGE",
+      "bucket_name": "chat-file-storage"
+    }
+  ],
   "observability": {
     "enabled": true
   },

@@ -13,6 +13,8 @@ interface Message {
   content: string;
   createdAt: string;
   user: User;
+  messageType?: "text" | "image" | "system" | "audio";
+  duration?: number; // For audio messages
 }
 
 interface Event {
@@ -82,6 +84,7 @@ export class ChatRoom extends DurableObject {
             avatar: "",
             coordinates: [0, 0],
           },
+          messageType: "system",
         };
 
         this.messages.push(leaveMessage);
@@ -91,25 +94,30 @@ export class ChatRoom extends DurableObject {
     });
 
     server.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data as string) as Event;
-      if (message.type === "message") {
-        this.messages.push(message.data as Message);
-        this.broadcast(message.data as Message);
-      } else if (message.type === "user") {
+      const messageEvent = JSON.parse(event.data as string) as Event;
+      if (messageEvent.type === "message") {
+        const newMessage = messageEvent.data as Message;
+        if (!newMessage.messageType) {
+          newMessage.messageType = "text";
+        }
+        this.messages.push(newMessage);
+        this.broadcast(newMessage);
+      } else if (messageEvent.type === "user") {
+        const userData = messageEvent.data as User;
         const existingUserIndex = this.sessions.findIndex(
-          (s) => s.user.id === (message.data as User).id
+          (s) => s.user.id === userData.id
         );
 
         if (existingUserIndex >= 0) {
-          this.sessions[existingUserIndex].user = message.data as User;
+          this.sessions[existingUserIndex].user = userData;
           this.broadcastUsers();
         } else {
-          this.sessions.push({ user: message.data as User, socket: server });
+          this.sessions.push({ user: userData, socket: server });
 
           const randomId = Math.random().toString(36).substring(2, 15);
-          const messageData: Message = {
+          const joinMessage: Message = {
             id: new Date().toISOString() + randomId,
-            content: `${(message.data as User).name} joined the chat`,
+            content: `${userData.name} joined the chat`,
             createdAt: new Date().toISOString(),
             user: {
               id: "system",
@@ -117,11 +125,12 @@ export class ChatRoom extends DurableObject {
               avatar: "",
               coordinates: [0, 0],
             },
+            messageType: "system",
           };
 
-          this.messages.push(messageData);
+          this.messages.push(joinMessage);
 
-          this.broadcast(messageData);
+          this.broadcast(joinMessage);
           this.broadcastUsers();
         }
       }

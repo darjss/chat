@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
+import { useMutation } from "@tanstack/react-query";
 
 import ngeohash from "ngeohash";
 import { authClient } from "@/lib/auth-client";
@@ -23,6 +24,8 @@ import {
   Menu,
   ChevronUp,
   ChevronDown,
+  Mic,
+  Square,
 } from "lucide-react";
 import MapComponent from "@/components/map-component";
 import ChatMessage from "@/components/chat-message";
@@ -86,6 +89,8 @@ const MemoizedPaperclip = memo(Paperclip);
 const MemoizedMapPin = memo(MapPin);
 const MemoizedChevronUp = memo(ChevronUp);
 const MemoizedChevronDown = memo(ChevronDown);
+const MemoizedMic = memo(Mic);
+const MemoizedSquare = memo(Square);
 
 // Storage keys
 const GEOHASH_STORAGE_KEY = "chat_geohash";
@@ -112,6 +117,8 @@ interface Message {
   content: string;
   createdAt: string;
   user: User;
+  messageType?: "text" | "image" | "system" | "audio";
+  duration?: number; // For audio messages
 }
 
 // Memoized message list component
@@ -136,7 +143,8 @@ const MessageList = memo(
             time={formatTime(msg.createdAt)}
             distance="nearby"
             isIncoming={msg.user.id !== session?.user?.id}
-            isSystem={msg.user.id === "system"}
+            isSystem={msg.user.id === "system" || msg.messageType === "system"}
+            messageType={msg.messageType || "text"}
           />
         ))}
       </>
@@ -155,10 +163,21 @@ function ChatPage() {
     [number, number] | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [uploadPreviewUrl, setUploadPreviewUrl] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+
   const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const previousUsers = useRef<User[]>([]);
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadPreviewUrlRef = useRef<string | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // Important optimization: store the last known position to avoid frequent state updates
   const lastKnownPosition = useRef<{
@@ -514,6 +533,7 @@ function ChatPage() {
             avatar: session.user.image || "/placeholder.svg",
             coordinates: currentUserCoordinates || [0, 0],
           },
+          messageType: "text",
         },
       };
       ws.current.send(JSON.stringify(messageData));
@@ -634,14 +654,273 @@ function ChatPage() {
     }
   }, [currentUserCoordinates, session, ws]);
 
+  // Mutation function for file upload
+  const uploadFileMutationFn = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const uploadUrl = `${import.meta.env.VITE_SERVER_URL}/api/upload`;
+    const response = await fetch(uploadUrl, {
+      method: "POST",
+      body: formData,
+      // headers: { 'Authorization': `Bearer ${session?.accessToken}` }, // If auth needed
+    });
+
+    if (!response.ok) {
+      let errorData;
+      try {
+        errorData = await response.json();
+      } catch (e) {
+        errorData = { error: response.statusText };
+      }
+      throw new Error(
+        errorData.error || `Upload failed with status: ${response.status}`
+      );
+    }
+    return response.json(); // Returns { success: boolean, filename: string, url: string }
+  };
+
+  // Start recording function
+  const startRecording = useCallback(async () => {
+    try {
+      // Reset previous recording data
+      audioChunksRef.current = [];
+      setRecordingDuration(0);
+      setAudioBlob(null);
+
+      // Get microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Create media recorder
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      // Add event listeners
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        // Combine all chunks into a single blob
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: "audio/webm",
+        });
+        setAudioBlob(audioBlob);
+
+        // Stop all audio tracks
+        stream.getTracks().forEach((track) => track.stop());
+
+        // Clear the recording timer
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+
+        // Auto upload the recording
+        if (audioBlob.size > 0) {
+          // Create a File from the Blob
+          const audioFile = new File(
+            [audioBlob],
+            `voice-message-${Date.now()}.webm`,
+            {
+              type: "audio/webm",
+            }
+          );
+
+          // Upload the audio file
+          uploadMutation.mutate(audioFile);
+        }
+      };
+
+      // Start recording
+      mediaRecorder.start();
+      setIsRecording(true);
+
+      // Setup timer to track recording duration
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingDuration((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      console.error("Error starting recording:", err);
+      setFileError(
+        "Could not access microphone. Please check your permissions."
+      );
+      setIsRecording(false);
+    }
+  }, []);
+
+  // Stop recording function
+  const stopRecording = useCallback(() => {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+    }
+  }, []);
+
+  // Clean up recording on component unmount
+  useEffect(() => {
+    return () => {
+      if (
+        mediaRecorderRef.current &&
+        mediaRecorderRef.current.state !== "inactive"
+      ) {
+        mediaRecorderRef.current.stop();
+      }
+
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+    };
+  }, []);
+
+  const uploadMutation = useMutation({
+    mutationFn: uploadFileMutationFn,
+    onSuccess: (data) => {
+      if (data.success && data.url) {
+        if (
+          ws.current &&
+          ws.current.readyState === WebSocket.OPEN &&
+          session?.user
+        ) {
+          const randomId = Math.random().toString(36).substring(2, 15);
+          const fileUrl = `${import.meta.env.VITE_SERVER_URL}${data.url}`;
+          const isAudio = audioBlob !== null;
+
+          const messageData = {
+            type: "message",
+            data: {
+              id:
+                new Date().toISOString() +
+                randomId +
+                "-" +
+                session?.user?.name +
+                (isAudio ? "-audio" : "-image"),
+              content: fileUrl,
+              createdAt: new Date().toISOString(),
+              user: {
+                id: session.user.id || randomId,
+                name: session.user.name || "Anonymous",
+                avatar: session.user.image || "/placeholder.svg",
+                coordinates: currentUserCoordinates || [0, 0],
+              },
+              messageType: isAudio ? ("audio" as const) : ("image" as const),
+              duration: isAudio ? recordingDuration : undefined,
+            },
+          };
+          ws.current.send(JSON.stringify(messageData));
+          setFileError(null);
+
+          // Reset audio recording state
+          if (isAudio) {
+            setAudioBlob(null);
+            setRecordingDuration(0);
+          }
+
+          if (uploadPreviewUrlRef.current) {
+            URL.revokeObjectURL(uploadPreviewUrlRef.current);
+            setUploadPreviewUrl(null);
+            uploadPreviewUrlRef.current = null;
+          }
+        } else {
+          // This case should ideally be handled by disabling UI or better error
+          setFileError(
+            "Cannot send message: WebSocket not ready or user not logged in."
+          );
+        }
+      } else {
+        setFileError(data.error || "Upload succeeded but no URL was returned.");
+      }
+    },
+    onError: (error: Error) => {
+      setFileError(error.message || "File upload failed.");
+      // Preview URL is not cleared here on error, user might want to retry with same preview
+      // It will be cleared if they select a new file.
+    },
+    onSettled: () => {
+      // This runs after onSuccess or onError
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ""; // Clear the file input
+      }
+    },
+  });
+
+  const triggerFileInput = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileSelectAndUpload = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+
+      if (uploadPreviewUrlRef.current) {
+        URL.revokeObjectURL(uploadPreviewUrlRef.current);
+      }
+      setUploadPreviewUrl(null);
+      uploadPreviewUrlRef.current = null;
+      setFileError(null);
+
+      if (!file.type.startsWith("image/")) {
+        setFileError("Please select an image file (e.g., PNG, JPG, GIF).");
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        return;
+      }
+
+      const MAX_FILE_SIZE = 4 * 1024 * 1024;
+      if (file.size > MAX_FILE_SIZE) {
+        setFileError(
+          `File is too large. Max size is ${MAX_FILE_SIZE / (1024 * 1024)}MB.`
+        );
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        return;
+      }
+
+      const currentPreviewObjectUrl = URL.createObjectURL(file);
+      setUploadPreviewUrl(currentPreviewObjectUrl);
+      uploadPreviewUrlRef.current = currentPreviewObjectUrl;
+
+      uploadMutation.mutate(file); // Use react-query to handle the upload
+    },
+    [uploadMutation] // Depends on the mutate function from useMutation
+  );
+
+  // useEffect for unmount cleanup
+  useEffect(() => {
+    return () => {
+      if (uploadPreviewUrlRef.current) {
+        URL.revokeObjectURL(uploadPreviewUrlRef.current);
+        uploadPreviewUrlRef.current = null;
+      }
+    };
+  }, []); // Empty dependency array, runs only on mount and unmount
+
+  // Format recording time
+  const formatRecordingTime = useCallback((seconds: number) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes}:${remainingSeconds < 10 ? "0" : ""}${remainingSeconds}`;
+  }, []);
+
   // Optimize send button disabled state with useMemo
   const isSendDisabled = useMemo(() => {
     return (
       !ws.current ||
       ws.current.readyState !== WebSocket.OPEN ||
-      !newMessage.trim()
+      !newMessage.trim() ||
+      uploadMutation.isPending || // Use isPending from useMutation
+      isRecording
     );
-  }, [ws.current?.readyState, newMessage]);
+  }, [
+    ws.current?.readyState,
+    newMessage,
+    uploadMutation.isPending,
+    isRecording,
+  ]);
 
   return (
     <main className="flex min-h-screen flex-col bg-gradient-to-br from-gray-900 via-purple-950 to-black overflow-hidden">
@@ -717,21 +996,91 @@ function ChatPage() {
 
               {/* Chat input */}
               <div className="p-2 sm:p-4 bg-black/50 border-t border-white/5">
+                {fileError && (
+                  <p className="text-red-400 text-xs mb-2 text-center px-2">
+                    {fileError}
+                  </p>
+                )}
+                {isRecording && (
+                  <div className="flex items-center gap-2 p-2 bg-black/20 rounded-md mb-2 mx-1 sm:mx-0">
+                    <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse" />
+                    <p className="text-purple-300 text-sm">
+                      Recording... {formatRecordingTime(recordingDuration)}
+                    </p>
+                  </div>
+                )}
+                {uploadMutation.isPending && !isRecording && (
+                  <div className="flex items-center gap-2 p-2 bg-black/20 rounded-md mb-2 mx-1 sm:mx-0">
+                    {uploadPreviewUrl ? (
+                      <img
+                        src={uploadPreviewUrl}
+                        alt="Preview"
+                        className="h-10 w-10 rounded object-cover flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 flex items-center justify-center bg-purple-900/50 rounded">
+                        <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
+                      </div>
+                    )}
+                    <p className="text-purple-300 text-sm animate-pulse">
+                      Uploading{" "}
+                      {audioBlob
+                        ? "audio"
+                        : uploadPreviewUrl
+                        ? "image"
+                        : "file"}
+                      ...
+                    </p>
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileSelectAndUpload}
+                    accept="image/*" // Accepts all image types
+                    className="hidden"
+                  />
                   <Button
                     variant="ghost"
                     size="icon"
                     className="rounded-full bg-white/5 hover:bg-white/10 h-8 w-8 sm:h-10 sm:w-10"
+                    onClick={triggerFileInput}
+                    disabled={uploadMutation.isPending || isRecording}
                   >
                     <MemoizedPaperclip className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className={`rounded-full h-8 w-8 sm:h-10 sm:w-10 ${
+                      isRecording
+                        ? "bg-red-500/70 hover:bg-red-500"
+                        : "bg-white/5 hover:bg-white/10"
+                    }`}
+                    onClick={isRecording ? stopRecording : startRecording}
+                    disabled={uploadMutation.isPending}
+                  >
+                    {isRecording ? (
+                      <MemoizedSquare className="h-4 w-4 sm:h-5 sm:w-5 text-white" />
+                    ) : (
+                      <MemoizedMic className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
+                    )}
                   </Button>
                   <div className="relative flex-1">
                     <Input
                       value={newMessage}
                       onChange={handleMessageChange}
                       onKeyPress={handleKeyPress}
-                      placeholder="Type a message..."
-                      className="bg-white/5 border-white/10 rounded-full pl-4 pr-12 py-5 sm:py-6 focus-visible:ring-purple-500 placeholder:text-gray-400"
+                      placeholder={
+                        isRecording
+                          ? "Recording voice message..."
+                          : uploadMutation.isPending
+                          ? "Uploading..."
+                          : "Type a message..."
+                      }
+                      className="bg-white/5 border-white/10 rounded-full pl-4 pr-12 py-5 sm:py-6 focus-visible:ring-purple-500 placeholder:text-gray-400 disabled:opacity-70"
+                      disabled={uploadMutation.isPending || isRecording}
                     />
                     <Button
                       onClick={sendMessage}
@@ -745,6 +1094,7 @@ function ChatPage() {
                     variant="ghost"
                     size="icon"
                     className="rounded-full bg-white/5 hover:bg-white/10 h-8 w-8 sm:h-10 sm:w-10"
+                    disabled={isRecording}
                   >
                     <MemoizedSmile className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
                   </Button>
