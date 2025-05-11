@@ -1,4 +1,11 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  memo,
+} from "react";
 
 import ngeohash from "ngeohash";
 import { authClient } from "@/lib/auth-client";
@@ -18,6 +25,65 @@ import {
 import MapComponent from "@/components/map-component";
 import ChatMessage from "@/components/chat-message";
 import { useMobile } from "@/hooks/use-mobile";
+
+// Custom hook for deep comparison
+function useDeepCompareMemoize<T>(value: T): T {
+  const ref = useRef<T | undefined>(undefined);
+
+  // Only update the ref if the value has changed significantly
+  // Using a simplistic deep comparison that works for our use case
+  if (!ref.current || !deepEqual(value, ref.current)) {
+    ref.current = value;
+  }
+
+  return ref.current;
+}
+
+// Simple deep equality comparison for our specific use case
+function deepEqual(obj1: any, obj2: any): boolean {
+  // Compare arrays of user objects
+  if (Array.isArray(obj1) && Array.isArray(obj2)) {
+    if (obj1.length !== obj2.length) return false;
+
+    // Create maps for faster comparison
+    const map1 = new Map();
+    obj1.forEach((user) => {
+      if (user && typeof user === "object" && "id" in user) {
+        map1.set(user.id, user);
+      }
+    });
+
+    // Check if all users in obj2 have equivalent data in obj1
+    return obj2.every((user) => {
+      if (!user || typeof user !== "object" || !("id" in user)) return false;
+      const user1 = map1.get(user.id);
+      if (!user1) return false;
+
+      // Check essential properties
+      return (
+        user1.name === user.name &&
+        user1.avatar === user.avatar &&
+        Array.isArray(user1.coordinates) &&
+        Array.isArray(user.coordinates) &&
+        user1.coordinates.length === 2 &&
+        user.coordinates.length === 2 &&
+        // Use small epsilon for float comparison
+        Math.abs(user1.coordinates[0] - user.coordinates[0]) < 0.0001 &&
+        Math.abs(user1.coordinates[1] - user.coordinates[1]) < 0.0001
+      );
+    });
+  }
+
+  return false;
+}
+
+// Memoize icon components to prevent recreating them on every render
+const MemoizedSend = memo(Send);
+const MemoizedSmile = memo(Smile);
+const MemoizedPaperclip = memo(Paperclip);
+const MemoizedMapPin = memo(MapPin);
+const MemoizedChevronUp = memo(ChevronUp);
+const MemoizedChevronDown = memo(ChevronDown);
 
 // Storage keys
 const GEOHASH_STORAGE_KEY = "chat_geohash";
@@ -46,7 +112,37 @@ interface Message {
   user: User;
 }
 
-export default function ChatPage() {
+// Memoized message list component
+const MessageList = memo(
+  ({
+    messages,
+    session,
+    formatTime,
+  }: {
+    messages: Message[];
+    session: any;
+    formatTime: (date: string) => string;
+  }) => {
+    return (
+      <>
+        {messages.map((msg) => (
+          <ChatMessage
+            key={msg.id}
+            avatar={msg.user.avatar || "/placeholder.svg"}
+            name={msg.user.name}
+            message={msg.content}
+            time={formatTime(msg.createdAt)}
+            distance="nearby"
+            isIncoming={msg.user.id !== session?.user?.id}
+            isSystem={msg.user.id === "system"}
+          />
+        ))}
+      </>
+    );
+  }
+);
+
+function ChatPage() {
   const isMobile = useMobile();
   const [mapExpanded, setMapExpanded] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -60,6 +156,40 @@ export default function ChatPage() {
   const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const previousUsers = useRef<User[]>([]);
+
+  // Important optimization: store the last known position to avoid frequent state updates
+  const lastKnownPosition = useRef<{
+    coords: [number, number];
+    timestamp: number;
+  } | null>(null);
+
+  // Minimum distance in meters needed to trigger a coordinate update
+  const MIN_DISTANCE_CHANGE = 5; // meters
+
+  // Minimum time between updates
+  const MIN_TIME_BETWEEN_UPDATES = 5000; // 5 seconds
+
+  // Helper to calculate distance between coordinates in meters
+  const getDistanceInMeters = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ) => {
+    // Haversine formula for distance calculation
+    const R = 6371e3; // Earth radius in meters
+    const φ1 = (lat1 * Math.PI) / 180;
+    const φ2 = (lat2 * Math.PI) / 180;
+    const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+    const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+      Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  };
 
   const { data: session } = authClient.useSession();
 
@@ -185,6 +315,7 @@ export default function ChatPage() {
         { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
       );
 
+      // Important optimization: store the last known position to avoid frequent state updates
       const watchId = navigator.geolocation.watchPosition(
         (pos) => {
           const coordinates: [number, number] = [
@@ -192,43 +323,42 @@ export default function ChatPage() {
             pos.coords.latitude,
           ];
 
-          // Update local state
-          setCurrentUserCoordinates(coordinates);
+          // Check if we should update state based on distance moved and time passed
+          const shouldUpdate = () => {
+            if (!lastKnownPosition.current) return true;
 
-          // Send updated coordinates to server
-          if (
-            ws.current &&
-            ws.current.readyState === WebSocket.OPEN &&
-            session?.user
-          ) {
-            const userData: User = {
-              id:
-                session.user.id || Math.random().toString(36).substring(2, 15),
-              name: session.user.name || "Anonymous",
-              avatar: session.user.image || "/placeholder.svg",
-              coordinates: coordinates,
+            const timeSinceLastUpdate =
+              Date.now() - lastKnownPosition.current.timestamp;
+            if (timeSinceLastUpdate < MIN_TIME_BETWEEN_UPDATES) return false;
+
+            const [prevLon, prevLat] = lastKnownPosition.current.coords;
+            const [newLon, newLat] = coordinates;
+
+            const distance = getDistanceInMeters(
+              prevLat,
+              prevLon,
+              newLat,
+              newLon
+            );
+            return distance > MIN_DISTANCE_CHANGE;
+          };
+
+          // Only update state if needed
+          if (shouldUpdate()) {
+            console.log("Updating position - significant movement detected");
+
+            // Update local state
+            setCurrentUserCoordinates(coordinates);
+
+            // Save this position
+            lastKnownPosition.current = {
+              coords: coordinates,
+              timestamp: Date.now(),
             };
 
-            ws.current.send(
-              JSON.stringify({
-                type: "user",
-                data: userData,
-              })
-            );
+            // Set error to null if previously had error
+            if (error) setError(null);
           }
-
-          // Update geohash comparison code remains...
-          const newHash = ngeohash.encode(
-            pos.coords.latitude,
-            pos.coords.longitude,
-            precision
-          );
-
-          if (newHash !== geohash) {
-            console.log("You've moved to a new area. Current room maintained.");
-          }
-
-          setError(null);
         },
         (err) => {
           console.error("Geolocation watch error:", err);
@@ -251,12 +381,12 @@ export default function ChatPage() {
         setError("Geolocation is not supported by your browser.");
       }
     }
-  }, [precision, geohash, ws, session, currentUserCoordinates]);
+  }, [precision, geohash, ws, session, error]);
 
-  // Toggle map expansion on mobile
-  const toggleMap = () => {
-    setMapExpanded(!mapExpanded);
-  };
+  // Toggle map expansion on mobile with useCallback
+  const toggleMap = useCallback(() => {
+    setMapExpanded((prev) => !prev);
+  }, []);
 
   useEffect(() => {
     // Scroll to bottom whenever messages change
@@ -352,7 +482,8 @@ export default function ChatPage() {
     };
   }, [geohash, session]);
 
-  const sendMessage = () => {
+  // Memoize the sendMessage function
+  const sendMessage = useCallback(() => {
     if (
       newMessage.trim() &&
       ws.current &&
@@ -377,15 +508,34 @@ export default function ChatPage() {
       ws.current.send(JSON.stringify(messageData));
       setNewMessage("");
     }
-  };
+  }, [newMessage, ws, session, currentUserCoordinates]);
 
-  const formatTime = (dateString: string) => {
+  // Extract message input handler to useCallback
+  const handleMessageChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setNewMessage(e.target.value);
+    },
+    []
+  );
+
+  // Extract and memoize the keypress handler
+  const handleKeyPress = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        sendMessage();
+      }
+    },
+    [sendMessage]
+  );
+
+  // Memoize the formatTime function
+  const formatTime = useCallback((dateString: string) => {
     const date = new Date(dateString);
     return date.toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit",
     });
-  };
+  }, []);
 
   // Create a computed users array that matches what MapComponent expects
   const mapUsers = useMemo((): MapUser[] => {
@@ -420,6 +570,26 @@ export default function ChatPage() {
     return [currentUser, ...otherUsers];
   }, [geohash, users, session?.user, currentUserCoordinates]);
 
+  // Type for our MapComponent props
+  type MapComponentProps = {
+    users: MapUser[];
+    centerCoordinates: [number, number] | null;
+    geolocationError: string | null;
+  };
+
+  // Further stabilize the props for MapComponent - compute the props first
+  const mapPropsValue = useMemo<MapComponentProps>(
+    () => ({
+      users: mapUsers,
+      centerCoordinates: currentUserCoordinates,
+      geolocationError: error,
+    }),
+    [mapUsers, currentUserCoordinates, error]
+  );
+
+  // Then use deep comparison to avoid recreating object when nothing significant changed
+  const stableMapProps = useDeepCompareMemoize(mapPropsValue);
+
   // Update user coordinates on the server whenever they change
   useEffect(() => {
     if (
@@ -436,17 +606,31 @@ export default function ChatPage() {
         coordinates: currentUserCoordinates,
       };
 
-      // Only send if we have actual coordinates
+      // Only send if we have actual coordinates and they've changed significantly
       if (currentUserCoordinates[0] !== 0 || currentUserCoordinates[1] !== 0) {
-        ws.current.send(
-          JSON.stringify({
-            type: "user",
-            data: userData,
-          })
-        );
+        // Add debouncing to avoid frequent updates
+        const timeoutId = setTimeout(() => {
+          ws.current?.send(
+            JSON.stringify({
+              type: "user",
+              data: userData,
+            })
+          );
+        }, 200); // 200ms debounce
+
+        return () => clearTimeout(timeoutId);
       }
     }
   }, [currentUserCoordinates, session, ws]);
+
+  // Optimize send button disabled state with useMemo
+  const isSendDisabled = useMemo(() => {
+    return (
+      !ws.current ||
+      ws.current.readyState !== WebSocket.OPEN ||
+      !newMessage.trim()
+    );
+  }, [ws.current?.readyState, newMessage]);
 
   return (
     <main className="flex min-h-screen flex-col bg-gradient-to-br from-gray-900 via-purple-950 to-black overflow-hidden">
@@ -479,7 +663,8 @@ export default function ChatPage() {
             >
               <div className="p-2 sm:p-3 bg-black/50 border-b border-white/5 flex items-center justify-between flex-shrink-0">
                 <h2 className="text-sm font-medium text-purple-300 flex items-center gap-1">
-                  <MapPin className="h-3 w-3 sm:h-4 sm:w-4" /> Nearby Users
+                  <MemoizedMapPin className="h-3 w-3 sm:h-4 sm:w-4" /> Nearby
+                  Users
                 </h2>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-purple-300/70">
@@ -493,79 +678,17 @@ export default function ChatPage() {
                       onClick={toggleMap}
                     >
                       {mapExpanded ? (
-                        <ChevronDown className="h-4 w-4 text-purple-300" />
+                        <MemoizedChevronDown className="h-4 w-4 text-purple-300" />
                       ) : (
-                        <ChevronUp className="h-4 w-4 text-purple-300" />
+                        <MemoizedChevronUp className="h-4 w-4 text-purple-300" />
                       )}
                     </Button>
                   )}
                 </div>
               </div>
-              {/* 
-              <div className="space-y-4">
-                {messages.map((msg) => {
-                  const isCurrentUser = msg.userName === session?.user?.name;
-                  return (
-                    <motion.div
-                      key={msg.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className={`flex ${
-                        isCurrentUser ? "justify-end" : "justify-start"
-                      }`}
-                    >
-                      {isCurrentUser ? (
-                        <div className="bg-gradient-to-r from-indigo-100 to-purple-100 text-indigo-600 px-4 py-2 rounded-full text-sm shadow-sm border border-indigo-200 flex items-center">
-                          <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            className="h-4 w-4 mr-2"
-                            viewBox="0 0 20 20"
-                            fill="currentColor"
-                          >
-                            <path d="M13 6a3 3 0 11-6 0 3 3 0 016 0zM18 8a2 2 0 11-4 0 2 2 0 014 0zM14 15a4 4 0 00-8 0v3h8v-3zM6 8a2 2 0 11-4 0 2 2 0 014 0zM16 18v-3a5.972 5.972 0 00-.75-2.906A3.005 3.005 0 0119 15v3h-3zM4.75 12.094A5.973 5.973 0 004 15v3H1v-3a3 3 0 013.75-2.906z" />
-                          </svg>
-                          {msg.content}
-                        </div>
-                      ) : (
-                        <div
-                          className={`p-3 rounded-2xl max-w-xs lg:max-w-md break-words ${
-                            isCurrentUser
-                              ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white rounded-tr-none shadow-md"
-                              : "bg-white text-gray-800 rounded-tl-none shadow-md border border-gray-200"
-                          }`}
-                        >
-                          <div
-                            className={`font-medium text-sm mb-1 ${
-                              isCurrentUser
-                                ? "text-indigo-100"
-                                : "text-indigo-600"
-                            }`}
-                          >
-                            {msg.userName}
-                          </div>
-                          <div className="text-sm">{msg.content}</div>
-                          <div
-                            className={`text-xs mt-1 ${
-                              isCurrentUser
-                                ? "text-indigo-200"
-                                : "text-gray-500"
-                            }`}
-                          >
-                            {formatTime(msg.createdAt)}
-                          </div>
-                        </div>
-                      )}
-                    </motion.div>
-                  );
-                })}
-              </div> */}
 
               <div className="relative w-full flex-1">
-                <MapComponent
-                  users={mapUsers}
-                  centerCoordinates={currentUserCoordinates}
-                  geolocationError={error}
-                />
+                <MapComponent {...stableMapProps} />
               </div>
             </div>
 
@@ -573,18 +696,11 @@ export default function ChatPage() {
             <div className="flex flex-col flex-1 rounded-xl sm:rounded-2xl overflow-hidden backdrop-blur-md bg-black/30 border border-white/10">
               {/* Chat messages */}
               <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 scrollbar-thin scrollbar-thumb-purple-900 scrollbar-track-transparent flex flex-col">
-                {messages.map((msg) => (
-                  <ChatMessage
-                    key={msg.id}
-                    avatar={msg.user.avatar || "/placeholder.svg"}
-                    name={msg.user.name}
-                    message={msg.content}
-                    time={formatTime(msg.createdAt)}
-                    distance="nearby"
-                    isIncoming={msg.user.id !== session?.user?.id}
-                    isSystem={msg.user.id === "system"}
-                  />
-                ))}
+                <MessageList
+                  messages={messages}
+                  session={session}
+                  formatTime={formatTime}
+                />
                 <div ref={messagesEndRef} />
               </div>
 
@@ -596,26 +712,22 @@ export default function ChatPage() {
                     size="icon"
                     className="rounded-full bg-white/5 hover:bg-white/10 h-8 w-8 sm:h-10 sm:w-10"
                   >
-                    <Paperclip className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
+                    <MemoizedPaperclip className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
                   </Button>
                   <div className="relative flex-1">
                     <Input
                       value={newMessage}
-                      onChange={(e) => setNewMessage(e.target.value)}
-                      onKeyPress={(e) => e.key === "Enter" && sendMessage()}
+                      onChange={handleMessageChange}
+                      onKeyPress={handleKeyPress}
                       placeholder="Type a message..."
                       className="bg-white/5 border-white/10 rounded-full pl-4 pr-12 py-5 sm:py-6 focus-visible:ring-purple-500 placeholder:text-gray-400"
                     />
                     <Button
                       onClick={sendMessage}
-                      disabled={
-                        !ws.current ||
-                        ws.current.readyState !== WebSocket.OPEN ||
-                        !newMessage.trim()
-                      }
+                      disabled={isSendDisabled}
                       className="absolute right-1 top-1/2 -translate-y-1/2 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 h-8 w-8 sm:h-10 sm:w-10 p-0 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <Send className="h-4 w-4 sm:h-5 sm:w-5" />
+                      <MemoizedSend className="h-4 w-4 sm:h-5 sm:w-5" />
                     </Button>
                   </div>
                   <Button
@@ -623,7 +735,7 @@ export default function ChatPage() {
                     size="icon"
                     className="rounded-full bg-white/5 hover:bg-white/10 h-8 w-8 sm:h-10 sm:w-10"
                   >
-                    <Smile className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
+                    <MemoizedSmile className="h-4 w-4 sm:h-5 sm:w-5 text-purple-300" />
                   </Button>
                 </div>
               </div>
@@ -634,3 +746,6 @@ export default function ChatPage() {
     </main>
   );
 }
+
+// Export the memoized version to prevent unnecessary re-renders
+export default memo(ChatPage);

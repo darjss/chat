@@ -1,6 +1,7 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { MapPin, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import React from "react";
 
 interface ChatMessageProps {
   avatar: string;
@@ -12,7 +13,7 @@ interface ChatMessageProps {
   isSystem?: boolean;
 }
 
-export default function ChatMessage({
+function ChatMessage({
   avatar,
   name,
   message,
@@ -101,3 +102,6 @@ export default function ChatMessage({
     </div>
   );
 }
+
+// Export the memoized version of the component to prevent unnecessary re-renders
+export default React.memo(ChatMessage);
