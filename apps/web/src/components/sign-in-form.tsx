@@ -29,7 +29,7 @@ export default function SignInForm({
         },
         {
           onSuccess: () => {
-            navigate("/dashboard");
+            navigate("/chat");
             toast.success("Sign in successful");
           },
           onError: (error) => {

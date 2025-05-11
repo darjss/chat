@@ -3,17 +3,37 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Send } from "lucide-react";
 import { useRef, useEffect } from "react";
+import { authClient } from "@/lib/auth-client";
+import { useNavigate } from "react-router";
+import { toast } from "sonner";
 
 export default function AI() {
+  const { data: session, isPending } = authClient.useSession();
+  const navigate = useNavigate();
   const { messages, input, handleInputChange, handleSubmit } = useChat({
     api: `${import.meta.env.VITE_SERVER_URL}/ai`,
   });
+
+  useEffect(() => {
+    if (!session && !isPending) {
+      toast.error("Please sign in to access this page");
+      navigate("/login");
+    }
+  }, [session, isPending, navigate]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  if (isPending) {
+    return <div>Loading...</div>;
+  }
+
+  if (!session) {
+    return null; // Will redirect in useEffect
+  }
 
   return (
     <div className="grid grid-rows-[1fr_auto] overflow-hidden w-full mx-auto p-4">

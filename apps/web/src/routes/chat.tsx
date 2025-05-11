@@ -6,6 +6,8 @@ import React, {
   useCallback,
   memo,
 } from "react";
+import { useNavigate } from "react-router";
+import { toast } from "sonner";
 
 import ngeohash from "ngeohash";
 import { authClient } from "@/lib/auth-client";
@@ -156,6 +158,7 @@ function ChatPage() {
   const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const previousUsers = useRef<User[]>([]);
+  const navigate = useNavigate();
 
   // Important optimization: store the last known position to avoid frequent state updates
   const lastKnownPosition = useRef<{
@@ -191,7 +194,15 @@ function ChatPage() {
     return R * c;
   };
 
-  const { data: session } = authClient.useSession();
+  const { data: session, isPending } = authClient.useSession();
+
+  // Add this effect to handle authentication
+  useEffect(() => {
+    if (!session && !isPending) {
+      toast.error("Please sign in to access this page");
+      navigate("/login");
+    }
+  }, [session, isPending, navigate]);
 
   // Load cached geohash on initial render
   useEffect(() => {
