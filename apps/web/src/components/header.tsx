@@ -67,10 +67,11 @@ export default function Header() {
                     variant="destructive"
                     className="w-full"
                     onClick={() => {
+                      console.log("signing out"); 
                       authClient.signOut({
                         fetchOptions: {
                           onSuccess: () => {
-                            navigate("/");
+                            console.log("signed out");
                           },
                         },
                       });
