@@ -1,5 +1,6 @@
 import { redis } from "@/db/redis";
 import { protectedProcedure, publicProcedure, router } from "../lib/trpc";
+import { businessRouter } from "../trpc/router/business";
 
 export const appRouter = router({
   healthCheck: publicProcedure.query(() => {
@@ -19,6 +20,7 @@ export const appRouter = router({
     }
     return value;
   }),
+  business: businessRouter,
 });
 
 // Helper function to calculate distance between two points

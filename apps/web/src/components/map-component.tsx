@@ -6,6 +6,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import { createRoot } from "react-dom/client";
 import UserAvatar from "./user-avatar";
 import ngeohash from "ngeohash";
+import { Store } from "lucide-react";
 
 // This would normally come from an environment variable
 // For demo purposes, we're using a public token
@@ -24,21 +25,62 @@ interface User {
   isUser?: boolean;
 }
 
+// Define business interface
+interface Business {
+  id: string;
+  name: string;
+  description: string;
+  logo: string;
+  coordinates: [number, number];
+  ownerId: string;
+}
+
 interface MapComponentProps {
   users: User[];
-  centerCoordinates: [number, number] | null; // New prop
-  geolocationError: string | null; // New prop
+  businesses?: Business[];
+  centerCoordinates: [number, number] | null;
+  geolocationError: string | null;
+  onBusinessClick?: (business: Business) => void;
 }
+
+// Custom styles for business popups - define outside component to avoid recreation
+const businessPopupStyles = `
+  .business-popup .mapboxgl-popup-content {
+    background-color: #1f1f23;
+    color: #e2e2e2;
+    border: 1px solid #3b3b3b;
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .business-popup .mapboxgl-popup-tip {
+    border-top-color: #1f1f23;
+    border-bottom-color: #1f1f23;
+  }
+`;
+
+// Add global styles once when module loads
+let stylesAdded = false;
+const addGlobalStyles = () => {
+  if (stylesAdded) return;
+
+  const styleElement = document.createElement("style");
+  styleElement.textContent = businessPopupStyles;
+  document.head.appendChild(styleElement);
+  stylesAdded = true;
+};
 
 const MapComponent = memo(
   function MapComponent({
     users,
+    businesses = [],
     centerCoordinates,
     geolocationError,
+    onBusinessClick,
   }: MapComponentProps) {
     const mapContainer = useRef<HTMLDivElement>(null);
     const map = useRef<mapboxgl.Map | null>(null);
     const markersRef = useRef<{ [key: number]: mapboxgl.Marker }>({});
+    const businessMarkersRef = useRef<{ [key: string]: mapboxgl.Marker }>({});
     const [mapLoaded, setMapLoaded] = useState(false);
     const [initialAnimationComplete, setInitialAnimationComplete] =
       useState(false);
@@ -58,8 +100,16 @@ const MapComponent = memo(
     // Add a ref to track the previous users to minimize redraws
     const prevUsers = useRef<User[]>([]);
 
+    // Add a ref to track the previous businesses to minimize redraws
+    const prevBusinesses = useRef<Business[]>([]);
+
     // Add a ref to track the previous geohash to minimize redraws
     const prevGeohash = useRef<string | null>(null);
+
+    // Add the global styles on component mount
+    useEffect(() => {
+      addGlobalStyles();
+    }, []);
 
     const updateGeohashDisplay = useCallback(
       (map: mapboxgl.Map, geohash: string) => {
@@ -580,6 +630,139 @@ const MapComponent = memo(
       });
     }, [users, mapLoaded]);
 
+    // Add business markers when map is loaded and businesses change
+    useEffect(() => {
+      if (!map.current || !mapLoaded || !initialAnimationComplete) return;
+
+      console.log("MapComponent businesses prop:", businesses);
+      console.log(
+        "Map loaded:",
+        mapLoaded,
+        "Animation complete:",
+        initialAnimationComplete
+      );
+
+      // Check if businesses array is empty or undefined
+      if (!businesses || businesses.length === 0) {
+        console.log("No businesses to display on map");
+        return;
+      }
+
+      // Track business IDs to display
+      const businessIdsToDisplay = new Set(
+        businesses.map((business) => business.id)
+      );
+
+      console.log("Business IDs to display:", Array.from(businessIdsToDisplay));
+
+      // Remove markers for businesses that no longer exist
+      const markersToRemove = Object.keys(businessMarkersRef.current).filter(
+        (id) => !businessIdsToDisplay.has(id)
+      );
+
+      markersToRemove.forEach((id) => {
+        businessMarkersRef.current[id]?.remove();
+        delete businessMarkersRef.current[id];
+      });
+
+      // Update or create markers for current businesses
+      businesses.forEach((business) => {
+        console.log(
+          "Creating/updating marker for business:",
+          business.name,
+          business.coordinates
+        );
+        const existingMarker = businessMarkersRef.current[business.id];
+
+        if (existingMarker) {
+          // Update existing marker position
+          existingMarker.setLngLat(business.coordinates);
+          console.log("Updated existing marker for:", business.name);
+        } else {
+          // Create business marker element
+          const markerEl = document.createElement("div");
+          markerEl.className =
+            "w-10 h-10 rounded-full bg-gray-800 border-2 border-purple-500 flex items-center justify-center z-[1000] overflow-hidden shadow-lg";
+
+          const root = createRoot(markerEl);
+          root.render(
+            <div className="flex items-center justify-center w-full h-full">
+              {business.logo ? (
+                <img
+                  src={business.logo}
+                  alt={business.name}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="flex items-center justify-center w-full h-full bg-gray-800 text-white">
+                  <Store className="h-5 w-5 text-purple-400" />
+                </div>
+              )}
+            </div>
+          );
+
+          // Create popup with business info
+          const popup = new mapboxgl.Popup({
+            closeButton: true,
+            closeOnClick: true,
+            offset: 25,
+            className: "business-popup",
+            maxWidth: "220px",
+          });
+
+          // Create HTML content for popup
+          const popupContent = document.createElement("div");
+          popupContent.className = "p-0";
+
+          const popupRoot = createRoot(popupContent);
+          popupRoot.render(
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2 mb-2">
+                {business.logo && (
+                  <img
+                    src={business.logo}
+                    alt={business.name}
+                    className="w-8 h-8 rounded-full object-cover border border-gray-700"
+                  />
+                )}
+                <div className="font-bold text-sm text-white">
+                  {business.name}
+                </div>
+              </div>
+              <p className="text-xs text-gray-400 mb-3">
+                {business.description}
+              </p>
+              <button
+                className="w-full py-1.5 px-3 bg-purple-700 text-white rounded text-xs hover:bg-purple-600 transition-colors font-medium"
+                onClick={() => onBusinessClick?.(business)}
+              >
+                Join Chat
+              </button>
+            </div>
+          );
+
+          popup.setDOMContent(popupContent);
+
+          // Create the marker
+          const marker = new mapboxgl.Marker({
+            element: markerEl,
+            anchor: "bottom",
+          })
+            .setLngLat(business.coordinates)
+            // Don't attach popup automatically
+            .addTo(map.current!);
+
+          // Add click event to marker to show popup only when clicked
+          markerEl.addEventListener("click", () => {
+            // Position and show the popup
+            popup.setLngLat(business.coordinates).addTo(map.current!);
+          });
+
+          businessMarkersRef.current[business.id] = marker;
+        }
+      });
+    }, [businesses, mapLoaded, initialAnimationComplete, onBusinessClick]);
+
     // Use geolocationError prop for error display
     if (geolocationError) {
       return (
@@ -597,6 +780,15 @@ const MapComponent = memo(
   (prevProps, nextProps) => {
     // Custom comparison function for memo to prevent unnecessary re-renders
 
+    // Always re-render if businesses changed
+    if (
+      JSON.stringify(prevProps.businesses) !==
+      JSON.stringify(nextProps.businesses)
+    ) {
+      console.log("Businesses changed, forcing re-render");
+      return false; // Not equal, re-render
+    }
+
     // If error state changed, we should re-render
     if (prevProps.geolocationError !== nextProps.geolocationError) {
       return false; // Not equal, so re-render
@@ -613,9 +805,9 @@ const MapComponent = memo(
         Math.abs(prevLat - nextLat) > 0.0001;
 
       if (!positionChangedSignificantly) {
-        // Position didn't change significantly, now check users
+        // Position didn't change significantly, now check users and businesses
 
-        // If length is different, definitely need to update
+        // If users length is different, definitely need to update
         if (prevProps.users.length !== nextProps.users.length) {
           return false; // Not equal, so re-render
         }

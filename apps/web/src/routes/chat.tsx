@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import ngeohash from "ngeohash";
 import { authClient } from "@/lib/auth-client";
@@ -26,10 +26,14 @@ import {
   ChevronDown,
   Mic,
   Square,
+  ChevronLeft,
+  Store,
 } from "lucide-react";
 import MapComponent from "@/components/map-component";
 import ChatMessage from "@/components/chat-message";
 import { useMobile } from "@/hooks/use-mobile";
+import { trpc } from "@/lib/trpc";
+import { skipToken } from "@tanstack/react-query";
 
 // Custom hook for deep comparison
 function useDeepCompareMemoize<T>(value: T): T {
@@ -49,6 +53,12 @@ function deepEqual(obj1: any, obj2: any): boolean {
   // Compare arrays of user objects
   if (Array.isArray(obj1) && Array.isArray(obj2)) {
     if (obj1.length !== obj2.length) return false;
+
+    // Special case for businesses array
+    if (obj1.length > 0 && obj1[0] && "ownerId" in obj1[0]) {
+      // This is likely a businesses array, use direct comparison
+      return JSON.stringify(obj1) === JSON.stringify(obj2);
+    }
 
     // Create maps for faster comparison
     const map1 = new Map();
@@ -94,6 +104,18 @@ const MemoizedSquare = memo(Square);
 
 // Storage keys
 const GEOHASH_STORAGE_KEY = "chat_geohash";
+const CHAT_MODE_STORAGE_KEY = "chat_mode";
+const ACTIVE_BUSINESS_STORAGE_KEY = "active_business";
+
+// Interface for Business
+interface Business {
+  id: string;
+  name: string;
+  description: string;
+  logo: string;
+  coordinates: [number, number];
+  ownerId: string;
+}
 
 interface User {
   id: string;
@@ -169,6 +191,10 @@ function ChatPage() {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
 
+  // New state for business chat
+  const [chatMode, setChatMode] = useState<"nearby" | "business">("nearby");
+  const [activeBusiness, setActiveBusiness] = useState<Business | null>(null);
+
   const ws = useRef<WebSocket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const previousUsers = useRef<User[]>([]);
@@ -223,20 +249,48 @@ function ChatPage() {
     }
   }, [session, isPending, navigate]);
 
-  // Load cached geohash on initial render
+  // Load cached values on initial render
   useEffect(() => {
     const cachedGeohash = localStorage.getItem(GEOHASH_STORAGE_KEY);
     if (cachedGeohash) {
       setGeohash(cachedGeohash);
     }
+
+    // Load cached chat mode and active business
+    const cachedChatMode = localStorage.getItem(CHAT_MODE_STORAGE_KEY) as
+      | "nearby"
+      | "business"
+      | null;
+    if (cachedChatMode) {
+      setChatMode(cachedChatMode);
+    }
+
+    const cachedBusinessJson = localStorage.getItem(
+      ACTIVE_BUSINESS_STORAGE_KEY
+    );
+    if (cachedBusinessJson && cachedChatMode === "business") {
+      try {
+        const cachedBusiness = JSON.parse(cachedBusinessJson);
+        setActiveBusiness(cachedBusiness);
+      } catch (e) {
+        console.error("Failed to parse cached business", e);
+      }
+    }
   }, []);
 
-  // When geohash changes, save to local storage
+  // Save chat mode and active business to local storage when they change
   useEffect(() => {
-    if (geohash) {
-      localStorage.setItem(GEOHASH_STORAGE_KEY, geohash);
+    localStorage.setItem(CHAT_MODE_STORAGE_KEY, chatMode);
+
+    if (activeBusiness) {
+      localStorage.setItem(
+        ACTIVE_BUSINESS_STORAGE_KEY,
+        JSON.stringify(activeBusiness)
+      );
+    } else {
+      localStorage.removeItem(ACTIVE_BUSINESS_STORAGE_KEY);
     }
-  }, [geohash]);
+  }, [chatMode, activeBusiness]);
 
   const handleLocationSelect = (lat: number, lng: number, hash: string) => {
     // Compare with current geohash before setting
@@ -423,22 +477,80 @@ function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Get nearby businesses using tRPC if in nearby mode
+  const { data: nearbyBusinesses = [] } = useQuery({
+    ...trpc.business.getNearby.queryOptions(
+      currentUserCoordinates
+        ? {
+            latitude: currentUserCoordinates[1],
+            longitude: currentUserCoordinates[0],
+            radius: 200, // 100 meters
+          }
+        : skipToken
+    ),
+    enabled: !!currentUserCoordinates && chatMode === "nearby",
+    refetchInterval: 30000, // Refetch every 30 seconds
+  });
+  console.log("nearbyBusinesses in chat.tsx:", nearbyBusinesses);
+  // Functions to switch between chat modes
+  const switchToBusiness = useCallback((business: Business) => {
+    // Disconnect from current chat
+    if (ws.current) {
+      ws.current.close();
+      ws.current = null;
+    }
+
+    // Reset messages for new chat
+    setMessages([]);
+
+    // Switch mode and set active business
+    setChatMode("business");
+    setActiveBusiness(business);
+  }, []);
+
+  const switchToNearby = useCallback(() => {
+    // Disconnect from business chat
+    if (ws.current) {
+      ws.current.close();
+      ws.current = null;
+    }
+
+    // Reset messages for nearby chat
+    setMessages([]);
+
+    // Switch mode
+    setChatMode("nearby");
+    setActiveBusiness(null);
+  }, []);
+
+  // Modify the WebSocket connection effect to handle different chat types
   useEffect(() => {
-    if (!geohash) return;
+    if (!session?.user) return;
 
     if (ws.current) {
-      console.log("Closing WebSocket connection123456");
+      console.log("Closing WebSocket connection");
       ws.current.close();
     }
 
     const connectWebSocket = () => {
-      // Construct WebSocket URL based on your server setup
-      // Assuming your WebSocket server is at /chat-room/:geohash
-      // And your server is running on the same host or you have a proxy
-      const wsUrl = `${import.meta.env.VITE_SERVER_URL.replace(
-        "http",
-        "ws"
-      )}/chat-room/${geohash}`;
+      let wsUrl = "";
+
+      if (chatMode === "nearby" && geohash) {
+        // Connect to nearby chat (existing logic)
+        wsUrl = `${import.meta.env.VITE_SERVER_URL.replace(
+          "http",
+          "ws"
+        )}/chat-room/${geohash}`;
+      } else if (chatMode === "business" && activeBusiness) {
+        // Connect to business chat
+        wsUrl = `${import.meta.env.VITE_SERVER_URL.replace(
+          "http",
+          "ws"
+        )}/chat-room/business-${activeBusiness.id}`;
+      } else {
+        // No valid chat to connect to
+        return;
+      }
 
       try {
         ws.current = new WebSocket(wsUrl);
@@ -510,7 +622,7 @@ function ChatPage() {
         ws.current.close();
       }
     };
-  }, [geohash, session]);
+  }, [geohash, session, chatMode, activeBusiness]);
 
   // Memoize the sendMessage function
   const sendMessage = useCallback(() => {
@@ -604,19 +716,30 @@ function ChatPage() {
   // Type for our MapComponent props
   type MapComponentProps = {
     users: MapUser[];
+    businesses?: Business[];
     centerCoordinates: [number, number] | null;
     geolocationError: string | null;
+    onBusinessClick?: (business: Business) => void;
   };
 
   // Further stabilize the props for MapComponent - compute the props first
-  const mapPropsValue = useMemo<MapComponentProps>(
-    () => ({
+  const mapPropsValue = useMemo<MapComponentProps>(() => {
+    const props = {
       users: mapUsers,
+      businesses: nearbyBusinesses as Business[], // Explicitly cast to Business[]
       centerCoordinates: currentUserCoordinates,
       geolocationError: error,
-    }),
-    [mapUsers, currentUserCoordinates, error]
-  );
+      onBusinessClick: switchToBusiness,
+    };
+    console.log("mapPropsValue businesses:", props.businesses);
+    return props;
+  }, [
+    mapUsers,
+    nearbyBusinesses,
+    currentUserCoordinates,
+    error,
+    switchToBusiness,
+  ]);
 
   // Then use deep comparison to avoid recreating object when nothing significant changed
   const stableMapProps = useDeepCompareMemoize(mapPropsValue);
@@ -953,13 +1076,25 @@ function ChatPage() {
             >
               <div className="p-2 sm:p-3 bg-black/50 border-b border-white/5 flex items-center justify-between flex-shrink-0">
                 <h2 className="text-sm font-medium text-purple-300 flex items-center gap-1">
-                  <MemoizedMapPin className="h-3 w-3 sm:h-4 sm:w-4" /> Nearby
-                  Users
+                  <MemoizedMapPin className="h-3 w-3 sm:h-4 sm:w-4" />
+                  {chatMode === "nearby" ? "Nearby Users" : "Business Chat"}
                 </h2>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-purple-300/70">
-                    {users.length} online
-                  </span>
+                  {chatMode === "nearby" ? (
+                    <span className="text-xs text-purple-300/70">
+                      {users.length} online
+                    </span>
+                  ) : (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="p-1 rounded-full text-purple-300 hover:text-purple-100 hover:bg-purple-900/50"
+                      onClick={switchToNearby}
+                    >
+                      <ChevronLeft className="h-3 w-3 sm:h-4 sm:w-4" />
+                      <span className="text-xs">Back</span>
+                    </Button>
+                  )}
                   {isMobile && (
                     <Button
                       variant="ghost"
@@ -984,8 +1119,47 @@ function ChatPage() {
 
             {/* Chat section - Larger on mobile */}
             <div className="flex flex-col flex-1 rounded-xl sm:rounded-2xl overflow-hidden backdrop-blur-md bg-black/30 border border-white/10">
+              {/* Business Chat Header */}
+              {chatMode === "business" && activeBusiness && (
+                <div className="p-2 sm:p-3 bg-black/50 border-b border-white/5 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={switchToNearby}
+                      className="rounded-full h-7 w-7 p-0"
+                    >
+                      <ChevronLeft className="h-4 w-4 text-purple-300" />
+                    </Button>
+                    <Store className="h-4 w-4 text-purple-300" />
+                    <div className="flex flex-col">
+                      <h2 className="text-sm font-medium text-purple-300">
+                        {activeBusiness.name}
+                      </h2>
+                      <p className="text-xs text-purple-300/70 truncate max-w-[200px]">
+                        {activeBusiness.description}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Chat messages */}
               <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 scrollbar-thin scrollbar-thumb-purple-900 scrollbar-track-transparent flex flex-col">
+                {chatMode === "business" &&
+                  activeBusiness &&
+                  messages.length === 0 && (
+                    <div className="flex flex-col items-center justify-center h-full text-center text-purple-300/70 space-y-2">
+                      <Store className="h-12 w-12 text-purple-300/50" />
+                      <h3 className="text-lg font-medium">
+                        Welcome to {activeBusiness.name}
+                      </h3>
+                      <p className="text-sm max-w-md">
+                        This is the beginning of the chat with{" "}
+                        {activeBusiness.name}. Say hello!
+                      </p>
+                    </div>
+                  )}
                 <MessageList
                   messages={messages}
                   session={session}
