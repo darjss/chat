@@ -1,15 +1,19 @@
 "use client";
 
-import { useEffect, useRef, useState, memo } from "react";
+import { useEffect, useRef, useState, memo, useCallback } from "react";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { createRoot } from "react-dom/client";
 import UserAvatar from "./user-avatar";
+import ngeohash from "ngeohash";
 
 // This would normally come from an environment variable
 // For demo purposes, we're using a public token
 const MAPBOX_TOKEN =
   "pk.eyJ1Ijoic291bmRicnVoIiwiYSI6ImNtYWlmeW8zODA2NW8yanM3NTVrbnZicHUifQ.zAlsz8FbfH8N4sUadaCylA";
+
+// Storage key for geohash
+const GEOHASH_STORAGE_KEY = "chat_geohash";
 
 interface User {
   id: number;
@@ -38,12 +42,205 @@ const MapComponent = memo(
     const [mapLoaded, setMapLoaded] = useState(false);
     const [initialAnimationComplete, setInitialAnimationComplete] =
       useState(false);
+    const geohashLayerRef = useRef<{
+      sourceId: string | null;
+      fillId: string | null;
+      lineId: string | null;
+    }>({
+      sourceId: null,
+      fillId: null,
+      lineId: null,
+    });
 
     // Add a ref to track the previous centerCoordinates to minimize redraws
     const prevCenterCoordinates = useRef<[number, number] | null>(null);
 
     // Add a ref to track the previous users to minimize redraws
     const prevUsers = useRef<User[]>([]);
+
+    // Add a ref to track the previous geohash to minimize redraws
+    const prevGeohash = useRef<string | null>(null);
+
+    const updateGeohashDisplay = useCallback(
+      (map: mapboxgl.Map, geohash: string) => {
+        if (!geohash) return;
+
+        try {
+          // Remove existing geohash layers if they exist
+          if (
+            geohashLayerRef.current.fillId &&
+            map.getLayer(geohashLayerRef.current.fillId)
+          ) {
+            map.removeLayer(geohashLayerRef.current.fillId);
+          }
+
+          if (
+            geohashLayerRef.current.lineId &&
+            map.getLayer(geohashLayerRef.current.lineId)
+          ) {
+            map.removeLayer(geohashLayerRef.current.lineId);
+          }
+
+          if (
+            geohashLayerRef.current.sourceId &&
+            map.getSource(geohashLayerRef.current.sourceId)
+          ) {
+            map.removeSource(geohashLayerRef.current.sourceId);
+          }
+
+          // Get bounding box for the geohash
+          const bbox = ngeohash.decode_bbox(geohash);
+
+          // Convert to GeoJSON format [[lon, lat], [lon, lat], ...]
+          const coordinates = [
+            [bbox[1], bbox[0]], // southwest
+            [bbox[3], bbox[0]], // southeast
+            [bbox[3], bbox[2]], // northeast
+            [bbox[1], bbox[2]], // northwest
+            [bbox[1], bbox[0]], // back to southwest to close the polygon
+          ];
+
+          // Create geojson data
+          const geojsonData = {
+            type: "Feature",
+            properties: {},
+            geometry: {
+              type: "Polygon",
+              coordinates: [coordinates],
+            },
+          };
+
+          // Create a unique ID for this geohash source
+          const sourceId = `geohash-source-${Date.now()}`;
+          const fillId = `${sourceId}-fill`;
+          const lineId = `${sourceId}-line`;
+
+          geohashLayerRef.current = {
+            sourceId,
+            fillId,
+            lineId,
+          };
+
+          // Add new source
+          map.addSource(sourceId, {
+            type: "geojson",
+            data: geojsonData as any,
+          });
+
+          // Add fill layer
+          map.addLayer({
+            id: fillId,
+            type: "fill",
+            source: sourceId,
+            paint: {
+              "fill-color": "#8a2be2",
+              "fill-opacity": 0.2,
+              "fill-outline-color": "#a64dff",
+            },
+          });
+
+          // Add outline layer
+          map.addLayer({
+            id: lineId,
+            type: "line",
+            source: sourceId,
+            paint: {
+              "line-color": "#a64dff",
+              "line-width": 2,
+            },
+          });
+
+          // Add click handler
+          const handleClick = (
+            e: mapboxgl.MapMouseEvent & {
+              features?: mapboxgl.MapboxGeoJSONFeature[];
+            }
+          ) => {
+            if (!map || !e.features || !e.features[0]) return;
+
+            // Calculate center of geohash area
+            const center = [
+              (bbox[1] + bbox[3]) / 2, // longitude
+              (bbox[0] + bbox[2]) / 2, // latitude
+            ];
+
+            // Calculate area approximately
+            const width =
+              (bbox[3] - bbox[1]) *
+              111.32 *
+              Math.cos((bbox[0] * Math.PI) / 180);
+            const height = (bbox[2] - bbox[0]) * 110.574;
+            const area = (width * height).toFixed(2);
+
+            // Create popup
+            new mapboxgl.Popup()
+              .setLngLat(center as [number, number])
+              .setHTML(
+                `
+              <div class="p-3">
+                <h3 class="font-bold mb-1">Chat Area</h3>
+                <p class="text-xs">Geohash: ${geohash}</p>
+                <p class="text-xs">Area: ~${area} km²</p>
+              </div>
+            `
+              )
+              .addTo(map);
+          };
+
+          // Add event listener for the new layer
+          map.on("click", fillId, handleClick);
+
+          // Center map on geohash area if needed
+          const centerOnGeohash = (geohash: string) => {
+            if (!map) return;
+
+            try {
+              // Get bounding box of geohash
+              const bbox = ngeohash.decode_bbox(geohash);
+
+              // Convert to mapbox bounds format (southwest, northeast)
+              const bounds = new mapboxgl.LngLatBounds(
+                [bbox[1], bbox[0]], // Southwest corner
+                [bbox[3], bbox[2]] // Northeast corner
+              );
+
+              // Fit map to these bounds with some padding
+              map.fitBounds(bounds, {
+                padding: 50,
+                maxZoom: 16,
+                duration: 1000,
+              });
+            } catch (error) {
+              console.error("Error centering on geohash:", error);
+            }
+          };
+
+          // Center on the geohash if a new geohash is selected
+          if (geohash !== prevGeohash.current) {
+            centerOnGeohash(geohash);
+            prevGeohash.current = geohash;
+          }
+
+          // Add hover effects
+          map.on("mouseenter", fillId, () => {
+            if (map.getCanvas()) {
+              map.getCanvas().style.cursor = "pointer";
+              map.setPaintProperty(fillId, "fill-opacity", 0.4);
+            }
+          });
+
+          map.on("mouseleave", fillId, () => {
+            if (map.getCanvas()) {
+              map.getCanvas().style.cursor = "";
+              map.setPaintProperty(fillId, "fill-opacity", 0.2);
+            }
+          });
+        } catch (error) {
+          console.error("Error updating geohash display:", error);
+        }
+      },
+      []
+    );
 
     useEffect(() => {
       if (!mapContainer.current) return;
@@ -84,6 +281,40 @@ const MapComponent = memo(
         }
       };
     }, []); // Runs once on mount
+
+    // Display geohash area based on localStorage value
+    useEffect(() => {
+      if (!map.current || !mapLoaded || !initialAnimationComplete) return;
+
+      try {
+        // Get geohash from localStorage
+        const geohash = localStorage.getItem(GEOHASH_STORAGE_KEY);
+        if (!geohash) return;
+
+        updateGeohashDisplay(map.current, geohash);
+
+        // Set up storage event listener
+        const handleStorageChange = (event: StorageEvent) => {
+          if (
+            event.key === GEOHASH_STORAGE_KEY &&
+            event.newValue &&
+            map.current
+          ) {
+            updateGeohashDisplay(map.current, event.newValue);
+          }
+        };
+
+        // Add event listener for storage changes
+        window.addEventListener("storage", handleStorageChange);
+
+        // Clean up
+        return () => {
+          window.removeEventListener("storage", handleStorageChange);
+        };
+      } catch (error) {
+        console.error("Error displaying geohash area:", error);
+      }
+    }, [mapLoaded, initialAnimationComplete, updateGeohashDisplay]);
 
     // New useEffect to center the map when centerCoordinates prop changes
     useEffect(() => {
