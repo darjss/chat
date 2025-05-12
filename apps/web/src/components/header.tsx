@@ -22,7 +22,7 @@ export default function Header() {
     <header className="flex items-center justify-between mb-2 sm:mb-4 px-3 py-2 sm:px-4 sm:py-3 bg-black/40 backdrop-blur-md rounded-xl sm:rounded-2xl border border-white/10">
       <div className="flex items-center gap-2">
         <h1 className="text-lg sm:text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-400">
-          Proximity Chat
+          Local Chat
         </h1>
       </div>
       <div className="flex items-center gap-2">

@@ -43,32 +43,6 @@ interface MapComponentProps {
   onBusinessClick?: (business: Business) => void;
 }
 
-// Custom styles for business popups - define outside component to avoid recreation
-const businessPopupStyles = `
-  .business-popup .mapboxgl-popup-content {
-    background-color: #1f1f23;
-    color: #e2e2e2;
-    border: 1px solid #3b3b3b;
-    border-radius: 8px;
-    padding: 12px;
-  }
-  .business-popup .mapboxgl-popup-tip {
-    border-top-color: #1f1f23;
-    border-bottom-color: #1f1f23;
-  }
-`;
-
-// Add global styles once when module loads
-let stylesAdded = false;
-const addGlobalStyles = () => {
-  if (stylesAdded) return;
-
-  const styleElement = document.createElement("style");
-  styleElement.textContent = businessPopupStyles;
-  document.head.appendChild(styleElement);
-  stylesAdded = true;
-};
-
 const MapComponent = memo(
   function MapComponent({
     users,
@@ -105,11 +79,6 @@ const MapComponent = memo(
 
     // Add a ref to track the previous geohash to minimize redraws
     const prevGeohash = useRef<string | null>(null);
-
-    // Add the global styles on component mount
-    useEffect(() => {
-      addGlobalStyles();
-    }, []);
 
     const updateGeohashDisplay = useCallback(
       (map: mapboxgl.Map, geohash: string) => {
@@ -222,19 +191,7 @@ const MapComponent = memo(
             const height = (bbox[2] - bbox[0]) * 110.574;
             const area = (width * height).toFixed(2);
 
-            // Create popup
-            new mapboxgl.Popup()
-              .setLngLat(center as [number, number])
-              .setHTML(
-                `
-              <div class="p-3">
-                <h3 class="font-bold mb-1">Chat Area</h3>
-                <p class="text-xs">Geohash: ${geohash}</p>
-                <p class="text-xs">Area: ~${area} km²</p>
-              </div>
-            `
-              )
-              .addTo(map);
+            // Removed popup creation for chat area
           };
 
           // Add event listener for the new layer
@@ -291,6 +248,39 @@ const MapComponent = memo(
       },
       []
     );
+
+    // Add custom styles for the popup - moved outside the useEffect to avoid recreation
+    const businessPopupStyles = `
+      .business-popup .mapboxgl-popup-content {
+        background-color: #121212;
+        color: #e2e2e2;
+        border: 1px solid #3b3b3b;
+        border-radius: 8px;
+        padding: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+      }
+      .business-popup .mapboxgl-popup-tip {
+        border-top-color: #121212;
+        border-bottom-color: #121212;
+      }
+      .business-tooltip .mapboxgl-popup-content {
+        background-color: #121212;
+        color: #e2e2e2;
+        padding: 6px;
+        border-radius: 4px;
+      }
+    `;
+
+    // Add styles to document head once
+    useEffect(() => {
+      const styleElement = document.createElement("style");
+      styleElement.textContent = businessPopupStyles;
+      document.head.appendChild(styleElement);
+
+      return () => {
+        document.head.removeChild(styleElement);
+      };
+    }, []);
 
     useEffect(() => {
       if (!mapContainer.current) return;
@@ -682,7 +672,7 @@ const MapComponent = memo(
           // Create business marker element
           const markerEl = document.createElement("div");
           markerEl.className =
-            "w-10 h-10 rounded-full bg-gray-800 border-2 border-purple-500 flex items-center justify-center z-[1000] overflow-hidden shadow-lg";
+            "w-10 h-10 rounded-full bg-gray-800 border-2 border-purple-500 flex items-center justify-center z-[1000] overflow-hidden shadow-lg cursor-pointer touch-manipulation";
 
           const root = createRoot(markerEl);
           root.render(
@@ -701,13 +691,23 @@ const MapComponent = memo(
             </div>
           );
 
-          // Create popup with business info
+          // Create the marker
+          const marker = new mapboxgl.Marker({
+            element: markerEl,
+            anchor: "bottom",
+          })
+            .setLngLat(business.coordinates)
+            .addTo(map.current!);
+
+          // Create popup with business info for click
           const popup = new mapboxgl.Popup({
             closeButton: true,
             closeOnClick: true,
             offset: 25,
             className: "business-popup",
             maxWidth: "220px",
+            anchor: "bottom",
+            closeOnMove: false,
           });
 
           // Create HTML content for popup
@@ -743,18 +743,25 @@ const MapComponent = memo(
 
           popup.setDOMContent(popupContent);
 
-          // Create the marker
-          const marker = new mapboxgl.Marker({
-            element: markerEl,
-            anchor: "bottom",
-          })
-            .setLngLat(business.coordinates)
-            // Don't attach popup automatically
-            .addTo(map.current!);
+          // Add click event to marker element
+          markerEl.addEventListener("click", (e) => {
+            e.stopPropagation();
+            // Show popup with dark background when marker is clicked
+            popup.setLngLat(business.coordinates).addTo(map.current!);
+          });
 
-          // Add click event to marker to show popup only when clicked
-          markerEl.addEventListener("click", () => {
-            // Position and show the popup
+          // Add touch events for better mobile support
+          markerEl.addEventListener(
+            "touchstart",
+            (e) => {
+              e.stopPropagation();
+            },
+            { passive: true }
+          );
+
+          markerEl.addEventListener("touchend", (e) => {
+            e.stopPropagation();
+            // Show popup with dark background when marker is touched
             popup.setLngLat(business.coordinates).addTo(map.current!);
           });
 

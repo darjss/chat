@@ -34,6 +34,10 @@ import ChatMessage from "@/components/chat-message";
 import { useMobile } from "@/hooks/use-mobile";
 import { trpc } from "@/lib/trpc";
 import { skipToken } from "@tanstack/react-query";
+import {
+  ChatLoadingIndicator,
+  ChatRoomLoadingIndicator,
+} from "@/components/loader";
 
 // Custom hook for deep comparison
 function useDeepCompareMemoize<T>(value: T): T {
@@ -143,6 +147,15 @@ interface Message {
   duration?: number; // For audio messages
 }
 
+// WebSocket connection states
+type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
+
+// Define the message data type structure
+type MessageData = {
+  type: string;
+  data: Message;
+};
+
 // Memoized message list component
 const MessageList = memo(
   ({
@@ -194,8 +207,14 @@ function ChatPage() {
   // New state for business chat
   const [chatMode, setChatMode] = useState<"nearby" | "business">("nearby");
   const [activeBusiness, setActiveBusiness] = useState<Business | null>(null);
+  // New state for WebSocket connection status
+  const [connectionState, setConnectionState] =
+    useState<ConnectionState>("disconnected");
+  const [pendingMessages, setPendingMessages] = useState<MessageData[]>([]);
 
   const ws = useRef<WebSocket | null>(null);
+  const wsUrl = useRef<string | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const previousUsers = useRef<User[]>([]);
   const navigate = useNavigate();
@@ -300,7 +319,7 @@ function ChatPage() {
     }
   };
 
-  const precision = 6;
+  const precision = 7;
 
   useEffect(() => {
     if (navigator.geolocation) {
@@ -494,69 +513,97 @@ function ChatPage() {
   console.log("nearbyBusinesses in chat.tsx:", nearbyBusinesses);
   // Functions to switch between chat modes
   const switchToBusiness = useCallback((business: Business) => {
-    // Disconnect from current chat
-    if (ws.current) {
-      ws.current.close();
-      ws.current = null;
-    }
-
-    // Reset messages for new chat
-    setMessages([]);
-
-    // Switch mode and set active business
+    // Switch mode and set active business first
     setChatMode("business");
     setActiveBusiness(business);
+    // Reset messages for new chat
+    setMessages([]);
+    // Set connection state to connecting
+    setConnectionState("connecting");
+
+    // The WebSocket will be reconnected in the useEffect
   }, []);
 
   const switchToNearby = useCallback(() => {
-    // Disconnect from business chat
-    if (ws.current) {
-      ws.current.close();
-      ws.current = null;
-    }
-
-    // Reset messages for nearby chat
-    setMessages([]);
-
-    // Switch mode
+    // Switch mode first
     setChatMode("nearby");
     setActiveBusiness(null);
+    // Reset messages for nearby chat
+    setMessages([]);
+    // Set connection state to connecting
+    setConnectionState("connecting");
+
+    // The WebSocket will be reconnected in the useEffect
   }, []);
 
   // Modify the WebSocket connection effect to handle different chat types
   useEffect(() => {
     if (!session?.user) return;
 
-    if (ws.current) {
-      console.log("Closing WebSocket connection");
-      ws.current.close();
-    }
-
-    const connectWebSocket = () => {
-      let wsUrl = "";
-
+    // Function to determine the appropriate WebSocket URL
+    const getWebSocketUrl = () => {
       if (chatMode === "nearby" && geohash) {
-        // Connect to nearby chat (existing logic)
-        wsUrl = `${import.meta.env.VITE_SERVER_URL.replace(
+        return `${import.meta.env.VITE_SERVER_URL.replace(
           "http",
           "ws"
         )}/chat-room/${geohash}`;
       } else if (chatMode === "business" && activeBusiness) {
-        // Connect to business chat
-        wsUrl = `${import.meta.env.VITE_SERVER_URL.replace(
+        return `${import.meta.env.VITE_SERVER_URL.replace(
           "http",
           "ws"
         )}/chat-room/business-${activeBusiness.id}`;
-      } else {
-        // No valid chat to connect to
-        return;
       }
+      return null;
+    };
+
+    // Get the appropriate WebSocket URL
+    const newWsUrl = getWebSocketUrl();
+
+    // If no valid URL or same URL as before, don't reconnect
+    if (!newWsUrl) {
+      setConnectionState("disconnected");
+      return;
+    }
+
+    // If URL hasn't changed and connection is already established or connecting, don't reconnect
+    if (
+      newWsUrl === wsUrl.current &&
+      (connectionState === "connected" || connectionState === "connecting") &&
+      ws.current
+    ) {
+      return;
+    }
+
+    // Update the ref for the current URL
+    wsUrl.current = newWsUrl;
+
+    // Clean up any existing WebSocket before creating a new one
+    if (ws.current) {
+      console.log("Closing existing WebSocket connection");
+      ws.current.onclose = null; // Remove existing onclose handler to prevent duplicate handlers
+      ws.current.close();
+      ws.current = null;
+    }
+
+    // Clear any pending reconnect timeout
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    // Set connecting state
+    setConnectionState("connecting");
+
+    const connectWebSocket = () => {
+      if (!wsUrl.current) return;
 
       try {
-        ws.current = new WebSocket(wsUrl);
+        console.log(`Connecting to WebSocket at ${wsUrl.current}`);
+        ws.current = new WebSocket(wsUrl.current);
 
         ws.current.onopen = () => {
           console.log("WebSocket connected");
+          setConnectionState("connected");
           setError(null);
 
           // Send user data when connection is established
@@ -575,6 +622,15 @@ function ChatPage() {
                 data: userData,
               })
             );
+
+            // Send any pending messages
+            if (pendingMessages.length > 0) {
+              console.log(`Sending ${pendingMessages.length} pending messages`);
+              pendingMessages.forEach((msg) => {
+                ws.current?.send(JSON.stringify(msg));
+              });
+              setPendingMessages([]);
+            }
           }
         };
 
@@ -599,59 +655,115 @@ function ChatPage() {
 
         ws.current.onerror = (error) => {
           console.error("WebSocket error:", error);
-          setError("WebSocket connection error. Please try refreshing.");
+          setConnectionState("error");
+          setError("WebSocket connection error. Attempting to reconnect...");
+
+          // Schedule a reconnection attempt
+          if (!reconnectTimeoutRef.current) {
+            reconnectTimeoutRef.current = window.setTimeout(() => {
+              reconnectTimeoutRef.current = null;
+              connectWebSocket();
+            }, 3000);
+          }
         };
 
-        ws.current.onclose = () => {
-          console.log("WebSocket disconnected");
-          // Optionally, you can try to reconnect here or notify the user
+        ws.current.onclose = (event) => {
+          console.log(
+            `WebSocket disconnected with code: ${event.code}, reason: ${event.reason}`
+          );
+          setConnectionState("disconnected");
+
+          // Only attempt to reconnect if this wasn't a clean close by the app
+          if (!event.wasClean) {
+            setError("Connection lost. Attempting to reconnect...");
+
+            // Schedule a reconnection attempt
+            if (!reconnectTimeoutRef.current) {
+              reconnectTimeoutRef.current = window.setTimeout(() => {
+                reconnectTimeoutRef.current = null;
+                connectWebSocket();
+              }, 3000);
+            }
+          }
         };
       } catch (e) {
         console.error("Failed to connect to WebSocket:", e);
+        setConnectionState("error");
         setError(
-          "Failed to establish chat connection. Ensure the server is running and accessible."
+          "Failed to establish chat connection. Retrying in a few seconds..."
         );
+
+        // Schedule a reconnection attempt
+        if (!reconnectTimeoutRef.current) {
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            reconnectTimeoutRef.current = null;
+            connectWebSocket();
+          }, 3000);
+        }
       }
     };
 
     connectWebSocket();
 
     return () => {
+      // Clean up WebSocket connection
       if (ws.current) {
-        console.log("clean up");
+        console.log("Cleaning up WebSocket connection");
+        ws.current.onclose = null; // Remove the handler to prevent reconnection attempts
         ws.current.close();
+        ws.current = null;
+      }
+
+      // Clear any pending reconnect timeout
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
     };
   }, [geohash, session, chatMode, activeBusiness]);
 
-  // Memoize the sendMessage function
+  // Memoize the sendMessage function with improved handling for connection state
   const sendMessage = useCallback(() => {
-    if (
-      newMessage.trim() &&
-      ws.current &&
-      ws.current.readyState === WebSocket.OPEN &&
-      session?.user
-    ) {
-      const randomId = Math.random().toString(36).substring(2, 15);
-      const messageData = {
-        type: "message",
-        data: {
-          id: new Date().toISOString() + randomId + "-" + session?.user?.name,
-          content: newMessage,
-          createdAt: new Date().toISOString(),
-          user: {
-            id: session.user.id || randomId,
-            name: session.user.name || "Anonymous",
-            avatar: session.user.image || "/placeholder.svg",
-            coordinates: currentUserCoordinates || [0, 0],
-          },
-          messageType: "text",
+    if (!newMessage.trim() || !session?.user) return;
+
+    const randomId = Math.random().toString(36).substring(2, 15);
+    const messageData: MessageData = {
+      type: "message",
+      data: {
+        id: new Date().toISOString() + randomId + "-" + session?.user?.name,
+        content: newMessage,
+        createdAt: new Date().toISOString(),
+        user: {
+          id: session.user.id || randomId,
+          name: session.user.name || "Anonymous",
+          avatar: session.user.image || "/placeholder.svg",
+          coordinates: currentUserCoordinates || [0, 0],
         },
-      };
+        messageType: "text",
+      },
+    };
+
+    // Check WebSocket connection state
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      // If connected, send directly
       ws.current.send(JSON.stringify(messageData));
-      setNewMessage("");
+    } else {
+      // If not connected, add to pending messages and show as optimistic UI update
+      console.log("WebSocket not connected, adding message to pending queue");
+      setPendingMessages((prev) => [...prev, messageData]);
+
+      // Add message to local state for immediate display (optimistic update)
+      setMessages((prev) => [...prev, messageData.data]);
+
+      // If connection state is error or disconnected, attempt to reconnect
+      if (connectionState === "error" || connectionState === "disconnected") {
+        // The reconnection logic is handled in the WebSocket useEffect
+        setConnectionState("connecting");
+      }
     }
-  }, [newMessage, ws, session, currentUserCoordinates]);
+
+    setNewMessage("");
+  }, [newMessage, ws, session, currentUserCoordinates, connectionState]);
 
   // Extract message input handler to useCallback
   const handleMessageChange = useCallback(
@@ -1032,15 +1144,15 @@ function ChatPage() {
   // Optimize send button disabled state with useMemo
   const isSendDisabled = useMemo(() => {
     return (
-      !ws.current ||
-      ws.current.readyState !== WebSocket.OPEN ||
       !newMessage.trim() ||
-      uploadMutation.isPending || // Use isPending from useMutation
+      (connectionState !== "connected" && pendingMessages.length > 5) || // Limit pending messages to 5
+      uploadMutation.isPending ||
       isRecording
     );
   }, [
-    ws.current?.readyState,
+    connectionState,
     newMessage,
+    pendingMessages.length,
     uploadMutation.isPending,
     isRecording,
   ]);
@@ -1144,6 +1256,9 @@ function ChatPage() {
                 </div>
               )}
 
+              {/* Connection status indicator */}
+              <ChatLoadingIndicator state={connectionState} />
+
               {/* Chat messages */}
               <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 sm:space-y-4 scrollbar-thin scrollbar-thumb-purple-900 scrollbar-track-transparent flex flex-col">
                 {chatMode === "business" &&
@@ -1160,6 +1275,9 @@ function ChatPage() {
                       </p>
                     </div>
                   )}
+                {messages.length === 0 &&
+                  connectionState === "connecting" &&
+                  chatMode === "nearby" && <ChatRoomLoadingIndicator />}
                 <MessageList
                   messages={messages}
                   session={session}
@@ -1251,6 +1369,8 @@ function ChatPage() {
                           ? "Recording voice message..."
                           : uploadMutation.isPending
                           ? "Uploading..."
+                          : connectionState === "connecting"
+                          ? "Connecting to chat..."
                           : "Type a message..."
                       }
                       className="bg-white/5 border-white/10 rounded-full pl-4 pr-12 py-5 sm:py-6 focus-visible:ring-purple-500 placeholder:text-gray-400 disabled:opacity-70"

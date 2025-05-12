@@ -1,7 +1,9 @@
 import type { Route } from "./+types/_index";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { trpc } from "@/utils/trpc";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { authClient } from "@/lib/auth-client";
+import { useNavigate } from "react-router";
 
 const TITLE_TEXT = `
  ██████╗ ███████╗████████╗████████╗███████╗██████╗
@@ -24,8 +26,9 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function Home() {
-  const healthCheck = useQuery(trpc.healthCheck.queryOptions());
-  const redis = useQuery(trpc.redis.queryOptions());
+  // const healthCheck = useQuery(trpc.healthCheck.queryOptions());
+  const navigate = useNavigate();
+  const { data: session, isPending } = authClient.useSession();
   const [location, setLocation] = useState<{
     latitude: number;
     longitude: number;
@@ -39,14 +42,13 @@ export default function Home() {
   // Nearby businesses query
   const nearbyBusinesses = useQuery({
     ...trpc.business.getNearby.queryOptions({
-      latitude: location?.latitude  as number, // Default to a location in Mongolia
-      longitude: location?.longitude  as number,
+      latitude: location?.latitude as number, // Default to a location in Mongolia
+      longitude: location?.longitude as number,
       radius: 1000, // 1km radius
     }),
     enabled: true, // Start with default location
   });
 
-  // St
   // Function to register all businesses
   const handleRegisterBusinesses = async () => {
     try {
@@ -80,11 +82,37 @@ export default function Home() {
     }
   };
 
+  // Redirect based on auth status
+  useEffect(() => {
+    if (!isPending) {
+      if (session) {
+        // User is authenticated, redirect to chat
+        navigate("/chat");
+      } else {
+        // User is not authenticated, redirect to login
+        navigate("/login");
+      }
+    }
+  }, [session, isPending, navigate]);
+
+  // Show loading screen while checking auth
+  if (isPending) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center">
+          <pre className="overflow-x-auto font-mono text-sm">{TITLE_TEXT}</pre>
+          <p className="mt-4">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // This will only be shown briefly before redirect happens
   return (
     <div className="container mx-auto max-w-3xl px-4 py-2">
       <pre className="overflow-x-auto font-mono text-sm">{TITLE_TEXT}</pre>
       <div className="grid gap-6">
-        <section className="rounded-lg border p-4">
+        {/* <section className="rounded-lg border p-4">
           <h2 className="mb-2 font-medium">API Status</h2>
           <div className="flex items-center gap-2">
             <div
@@ -99,9 +127,8 @@ export default function Home() {
                 ? "Connected"
                 : "Disconnected"}
             </span>
-            <span className="text-sm text-muted-foreground">{redis.data}</span>
           </div>
-        </section>
+        </section> */}
 
         <section className="rounded-lg border p-4">
           <h2 className="mb-2 font-medium">Business Management</h2>

@@ -39,10 +39,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
-        <script
-          crossOrigin="anonymous"
-          src="//unpkg.com/react-scan/dist/auto.global.js"
-        />
         <Links />
       </head>
       <body>
@@ -64,7 +60,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <Toaster richColors />
         </ThemeProvider>
-        <ReactQueryDevtools position="bottom" buttonPosition="bottom-right" />
       </QueryClientProvider>
     );
   }
